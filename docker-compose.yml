@@ -1,0 +1,22 @@
+services:
+  openapi-to-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/epam/ai-dial-openapi-to-mcp:development
+    environment:
+      MCP_PORT: ${MCP_PORT:-8080}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MCP_CACHE_MAX_SIZE: ${MCP_CACHE_MAX_SIZE:-100}
+      MCP_CACHE_TTL: ${MCP_CACHE_TTL:-3600}
+      MCP_CACHE_CLEANUP_INTERVAL: ${MCP_CACHE_CLEANUP_INTERVAL:-300}
+      OUTBOUND_HEADER_ALLOWLIST: ${OUTBOUND_HEADER_ALLOWLIST:-}
+    ports:
+      - "${MCP_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  sample-api:
+    image: swaggerapi/petstore3:1.0.7
+    profiles: ["sample"]
+    ports:
+      - "8000:8080"

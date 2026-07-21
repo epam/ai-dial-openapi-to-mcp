@@ -1,0 +1,63 @@
+{
+    "$schema": "https://dial.epam.com/application_type_schemas/schema#",
+    "dial:applicationTypeDisplayName": "OpenAPI to MCP",
+    "type": "object",
+    "title": "OpenAPI to MCP Configuration",
+    "properties": {
+        "openapi": {
+            "type": "object",
+            "title": "OpenAPI Spec",
+            "description": "OpenAPI Specification of the target API",
+            "properties": {},
+            "dial:meta": {
+                "dial:propertyKind": "server",
+                "dial:propertyOrder": 1
+            }
+        },
+        "base_url": {
+            "type": "string",
+            "title": "Base URL",
+            "description": "The base URL of the target API. All tool invocations will be made relative to this URL.",
+            "dial:meta": {
+                "dial:propertyKind": "server",
+                "dial:propertyOrder": 2
+            }
+        },
+        "extra_headers": {
+            "type": "array",
+            "title": "Extra Headers",
+            "description": "Extra headers to inject on API call",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "title": "Header Name",
+                        "description": "Name of header"
+                    },
+                    "value": {
+                        "type": "string",
+                        "title": "Header Value",
+                        "description": "Value of header"
+                    }
+                }
+            },
+            "dial:meta": {
+                "dial:propertyKind": "server",
+                "dial:propertyOrder": 3
+            }
+        },
+        "external_service": {
+            "type": "string",
+            "title": "External Service",
+            "description": "Name of an entry in this application's external_services registry to source live auth credentials from",
+            "dial:resource": true,
+            "acceptableResourceTypes": ["external_services"],
+            "dial:meta": {
+                "dial:propertyKind": "server",
+                "dial:propertyOrder": 4
+            }
+        }
+    },
+    "required": ["openapi"]
+}

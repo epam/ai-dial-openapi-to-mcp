@@ -1,0 +1,15 @@
+name: Technical debt
+description: Track maintainability, testing, or reliability work
+title: "chore: "
+labels: [technical-debt]
+body:
+  - type: textarea
+    attributes:
+      label: Problem
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Proposed outcome
+    validations:
+      required: true
