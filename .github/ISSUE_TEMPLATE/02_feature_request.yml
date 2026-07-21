@@ -1,0 +1,21 @@
+name: Feature request
+description: Propose a user-facing capability
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes:
+      label: Description
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Use case or motivation
+    validations:
+      required: true
+  - type: checkboxes
+    attributes:
+      label: Confidential information
+      options:
+        - label: This issue contains no credentials, personal data, or private infrastructure details.
+          required: true

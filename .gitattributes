@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+.cursor export-ignore
+.specify export-ignore
+.claude export-ignore
