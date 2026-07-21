@@ -1,0 +1,436 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Sample TODO API",
+    "description": "A simple TODO list API for demonstration",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://jsonplaceholder.typicode.com",
+      "description": "JSONPlaceholder - Free fake API for testing"
+    }
+  ],
+  "paths": {
+    "/todos": {
+      "get": {
+        "summary": "Get all todos",
+        "description": "Retrieve a list of all todo items",
+        "operationId": "getTodos",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Todo"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-mcp": {
+          "name": "todo_list",
+          "description": "List all todo items with summary metadata",
+          "inputSchema": {
+            "type": "object",
+            "properties": {}
+          },
+          "outputSchema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "userId": {
+                  "type": "integer",
+                  "description": "The ID of the user who owns this todo"
+                },
+                "id": {
+                  "type": "integer",
+                  "description": "The unique identifier of the todo"
+                },
+                "title": {
+                  "type": "string",
+                  "description": "The title of the todo"
+                },
+                "completed": {
+                  "type": "boolean",
+                  "description": "Whether the todo is completed"
+                }
+              },
+              "required": [
+                "userId",
+                "id",
+                "title",
+                "completed"
+              ]
+            }
+          },
+          "tags": []
+        }
+      },
+      "post": {
+        "summary": "Create a new todo",
+        "description": "Create a new todo item",
+        "operationId": "createTodo",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TodoInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Todo created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Todo"
+                }
+              }
+            }
+          }
+        },
+        "x-mcp": {
+          "description": "Create a new todo (title and user required)",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "userId": {
+                "type": "integer",
+                "description": "The ID of the user who owns this todo"
+              },
+              "title": {
+                "type": "string",
+                "description": "The title of the todo"
+              },
+              "completed": {
+                "type": "boolean",
+                "description": "Whether the todo is completed",
+                "default": false
+              }
+            },
+            "required": [
+              "userId",
+              "title"
+            ]
+          },
+          "outputSchema": {
+            "type": "object",
+            "properties": {
+              "userId": {
+                "type": "integer",
+                "description": "The ID of the user who owns this todo"
+              },
+              "id": {
+                "type": "integer",
+                "description": "The unique identifier of the todo"
+              },
+              "title": {
+                "type": "string",
+                "description": "The title of the todo"
+              },
+              "completed": {
+                "type": "boolean",
+                "description": "Whether the todo is completed"
+              }
+            },
+            "required": [
+              "userId",
+              "id",
+              "title",
+              "completed"
+            ]
+          },
+          "tags": []
+        }
+      }
+    },
+    "/todos/{id}": {
+      "get": {
+        "summary": "Get a todo by ID",
+        "description": "Retrieve a specific todo item by its ID",
+        "operationId": "getTodoById",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the todo item",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Todo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Todo not found"
+          }
+        },
+        "x-mcp": {
+          "description": "Fetch a single todo by ID",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "outputSchema": {
+            "type": "object",
+            "properties": {
+              "userId": {
+                "type": "integer",
+                "description": "The ID of the user who owns this todo"
+              },
+              "id": {
+                "type": "integer",
+                "description": "The unique identifier of the todo"
+              },
+              "title": {
+                "type": "string",
+                "description": "The title of the todo"
+              },
+              "completed": {
+                "type": "boolean",
+                "description": "Whether the todo is completed"
+              }
+            },
+            "required": [
+              "userId",
+              "id",
+              "title",
+              "completed"
+            ]
+          },
+          "tags": [],
+          "parameters": {
+            "id": {
+              "description": "Todo identifier"
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update a todo",
+        "description": "Update an existing todo item",
+        "operationId": "updateTodo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the todo item",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TodoInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Todo updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Todo"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a todo",
+        "description": "Delete a todo item",
+        "operationId": "deleteTodo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the todo item",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Todo deleted successfully"
+          },
+          "404": {
+            "description": "Todo not found"
+          }
+        }
+      }
+    },
+    "/users/{userId}/todos": {
+      "get": {
+        "summary": "Get todos by user",
+        "description": "Retrieve all todos for a specific user",
+        "operationId": "getTodosByUser",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the user",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Todo"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-mcp": {
+          "name": "user_todos",
+          "description": "List todos for a specific user",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "userId": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "userId"
+            ]
+          },
+          "outputSchema": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "userId": {
+                  "type": "integer",
+                  "description": "The ID of the user who owns this todo"
+                },
+                "id": {
+                  "type": "integer",
+                  "description": "The unique identifier of the todo"
+                },
+                "title": {
+                  "type": "string",
+                  "description": "The title of the todo"
+                },
+                "completed": {
+                  "type": "boolean",
+                  "description": "Whether the todo is completed"
+                }
+              },
+              "required": [
+                "userId",
+                "id",
+                "title",
+                "completed"
+              ]
+            }
+          },
+          "tags": [],
+          "parameters": {
+            "userId": {
+              "description": "User identifier"
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Todo": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "integer",
+            "description": "The ID of the user who owns this todo"
+          },
+          "id": {
+            "type": "integer",
+            "description": "The unique identifier of the todo"
+          },
+          "title": {
+            "type": "string",
+            "description": "The title of the todo"
+          },
+          "completed": {
+            "type": "boolean",
+            "description": "Whether the todo is completed"
+          }
+        },
+        "required": [
+          "userId",
+          "id",
+          "title",
+          "completed"
+        ]
+      },
+      "TodoInput": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "integer",
+            "description": "The ID of the user who owns this todo"
+          },
+          "title": {
+            "type": "string",
+            "description": "The title of the todo"
+          },
+          "completed": {
+            "type": "boolean",
+            "description": "Whether the todo is completed",
+            "default": false
+          }
+        },
+        "required": [
+          "userId",
+          "title"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+name: Bug report
+description: Report reproducible behavior in OpenAPI to MCP
+title: "fix: "
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Do not include tokens, internal URLs, or sensitive payloads.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behavior

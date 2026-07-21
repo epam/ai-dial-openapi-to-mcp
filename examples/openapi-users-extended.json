@@ -1,0 +1,123 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Example API",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://api.example.com"
+    }
+  ],
+  "paths": {
+    "/users": {
+      "get": {
+        "operationId": "list_users",
+        "summary": "List users",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-mcp": {
+          "name": "user_list",
+          "description": "List users with pagination and filters",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              }
+            }
+          },
+          "outputSchema": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "tags": [],
+          "parameters": {
+            "limit": {
+              "description": "Max users to return (1-100)"
+            }
+          }
+        }
+      }
+    },
+    "/users/{user_id}": {
+      "get": {
+        "operationId": "get_user",
+        "summary": "Get user by ID",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "x-mcp": {
+          "description": "Fetch a single user by their unique ID",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          },
+          "outputSchema": {
+            "type": "object"
+          },
+          "tags": [],
+          "parameters": {
+            "user_id": {
+              "description": "User identifier"
+            }
+          }
+        }
+      }
+    }
+  }
+}
