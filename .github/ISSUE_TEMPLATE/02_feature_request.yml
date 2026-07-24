@@ -1,21 +1,30 @@
-name: Feature request
-description: Propose a user-facing capability
-title: "feat: "
-labels: [enhancement]
+name: "🚀 Feature request"
+description: Suggest an idea for this project
+labels: ["enhancement"]
 body:
-  - type: textarea
+  - type: markdown
     attributes:
-      label: Description
+      value: |
+        Thank you for suggesting an idea to improve DIAL.
+        Please fill in as much of the following form as you're able.
+  - type: input
+    attributes:
+      label: Name and Version
+      description: Application name and version
+      placeholder: dial 1.2.3
     validations:
       required: true
   - type: textarea
     attributes:
-      label: Use case or motivation
+      label: What is the problem this feature will solve?
     validations:
       required: true
-  - type: checkboxes
+  - type: textarea
     attributes:
-      label: Confidential information
-      options:
-        - label: This issue contains no credentials, personal data, or private infrastructure details.
-          required: true
+      label: What is the feature you are proposing to solve the problem?
+      description: Describe the requests. If you already have something in mind... PRs are welcome!
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: What alternatives have you considered?

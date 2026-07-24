@@ -1,14 +1,11 @@
 # Reporting Security Issues
 
-We take security reports seriously and appreciate responsible disclosure.
+We take all security reports seriously. We appreciate your efforts to responsibly disclose your findings and will make every effort to acknowledge your contributions.
 
-> [!CAUTION]
-> Do **not** file public GitHub issues for vulnerabilities.
+⚠️ Please do *not* file GitHub issues for security vulnerabilities as they are public! ⚠️
 
-Report vulnerabilities through the [GitHub Security Advisory report form](https://github.com/epam/ai-dial-openapi-to-mcp/security/advisories/new). Include enough detail to reproduce the issue without publishing credentials, tokens, private URLs, or customer data.
+To report a security issue, please use the GitHub Security Advisory ["Report a Vulnerability"](https://github.com/epam/ai-dial-openapi-to-mcp/security/advisories/new) tab. Tip: In this form, only the title and description are mandatory.
 
-## Security model
+We will send a response indicating the next steps in handling your report. After the initial reply to your report, we will keep you informed of the progress toward a fix and full announcement and may ask for additional information or guidance.
 
-OpenAPI to MCP sends outbound HTTP requests based on client-provided OpenAPI metadata. Deploy it behind authenticated ingress and behind external network egress controls (a firewall or egress proxy) that restrict which destinations it can reach — the bridge itself does not restrict outbound destinations. Credentials are request-scoped and logs must contain metadata rather than payloads or header values.
-
-The initial supported version is the latest release on the `development` branch until the first tagged release establishes a formal support policy.
+When we receive such reports, we will investigate and subsequently address any potential vulnerabilities as quickly as possible.
