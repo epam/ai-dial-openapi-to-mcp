@@ -1,13 +1,5 @@
 # How to contribute
 
-OpenAPI to MCP welcomes bug fixes, security improvements, tests, documentation, and new compatibility coverage.
+As an open-source project in a rapidly developing field, we are open to contributions, whether it be in the form of a new feature, improved infrastructure, or better documentation.
 
-Use the shared [DIAL contribution guidance](https://github.com/epam/ai-dial/blob/main/CONTRIBUTING.md), then run:
-
-```bash
-make format
-make lint
-make test
-```
-
-Use Conventional Commit titles and include tests and documentation for behavior changes. Do not commit credentials, internal URLs, request captures, or generated local configuration.
+For detailed information on how to contribute, see the full [contributing documentation](https://github.com/epam/ai-dial/blob/main/CONTRIBUTING.md).
