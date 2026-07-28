@@ -135,6 +135,56 @@ def bridge_server(api_server: str) -> Iterator[str]:
             os.environ[name] = value
 
 
+def _make_fake_dial_core_app(*, configured_services: set[str], has_stored_credential: bool):
+    """Minimal fake DIAL core: GET /v1/{application} reports which external_services
+    are configured; POST /v1/ops/external-service/credentials 404s unless a stored
+    credential is simulated."""
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def get_application(request):
+        return JSONResponse(
+            {"external_services": {name: {} for name in configured_services}}
+        )
+
+    async def post_credentials(request):
+        if not has_stored_credential:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(
+            {"header_name": "X-Upstream-Token", "header_value": "tok", "expires_at": None}
+        )
+
+    return Starlette(
+        routes=[
+            Route("/v1/{application:path}", get_application, methods=["GET"]),
+            Route(
+                "/v1/ops/external-service/credentials", post_credentials, methods=["POST"]
+            ),
+        ]
+    )
+
+
+@pytest.fixture
+def fake_dial_core_not_configured() -> Iterator[str]:
+    app = _make_fake_dial_core_app(configured_services=set(), has_stored_credential=False)
+    port = _free_port()
+    server, thread = _start_server_thread(app, port)
+    yield f"http://127.0.0.1:{port}"
+    _stop_server_thread(server, thread)
+
+
+@pytest.fixture
+def fake_dial_core_needs_signin() -> Iterator[str]:
+    app = _make_fake_dial_core_app(
+        configured_services={"sample-external-service"}, has_stored_credential=False
+    )
+    port = _free_port()
+    server, thread = _start_server_thread(app, port)
+    yield f"http://127.0.0.1:{port}"
+    _stop_server_thread(server, thread)
+
+
 # ---------------------------------------------------------------------------
 # Function-scoped async fixtures  (fresh MCP session per test)
 # ---------------------------------------------------------------------------
@@ -161,6 +211,21 @@ async def mcp_client_with_api_key(bridge_server: str, api_server: str):
             "X-META": json.dumps(ANIMAL_OPENAPI_SPEC),
             "X-BASE-URL": api_server,
             "X-EXTRA-HEADERS": json.dumps([{"name": "X-API-Key", "value": "test-secret"}]),
+        },
+    )
+    async with Client(transport) as client:
+        yield client
+
+
+@pytest.fixture
+async def mcp_client_with_dial_headers(bridge_server: str, api_server: str):
+    transport = StreamableHttpTransport(
+        url=bridge_server,
+        headers={
+            "X-META": json.dumps(ANIMAL_OPENAPI_SPEC),
+            "X-BASE-URL": api_server,
+            "x-dial-application-id": "applications/bucket/app",
+            "api-key": "secret",
         },
     )
     async with Client(transport) as client:
@@ -337,3 +402,50 @@ class TestDialCredentialsMisconfig:
         text = result.content[0].text
         assert "external_service" in text
         assert "x-dial-application-id" in text
+        assert result.meta["dial.epam.com/error"]["status_code"] == 500
+        assert result.meta["dial.epam.com/error"]["external_service"] == "sample-external-service"
+
+    async def test_external_service_not_configured_returns_404_meta(
+        self,
+        mcp_client_with_dial_headers: Client,
+        fake_dial_core_not_configured: str,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("DIAL_URL", fake_dial_core_not_configured)
+        result = await mcp_client_with_dial_headers.call_tool(
+            "list_animals",
+            {},
+            meta={"ai_dial_config": {"external_service": "sample-external-service"}},
+            raise_on_error=False,
+        )
+        assert result.is_error
+        assert result.meta["dial.epam.com/error"] == {
+            "status_code": 404,
+            "external_service": "sample-external-service",
+        }
+        assert "dial.epam.com/auth-challenge" not in result.meta
+
+    async def test_external_service_needs_signin_returns_401_challenge(
+        self,
+        mcp_client_with_dial_headers: Client,
+        fake_dial_core_needs_signin: str,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("DIAL_URL", fake_dial_core_needs_signin)
+        result = await mcp_client_with_dial_headers.call_tool(
+            "list_animals",
+            {},
+            meta={"ai_dial_config": {"external_service": "sample-external-service"}},
+            raise_on_error=False,
+        )
+        assert result.is_error
+        assert result.meta["dial.epam.com/error"] == {
+            "status_code": 401,
+            "external_service": "sample-external-service",
+        }
+        assert result.meta["dial.epam.com/auth-challenge"] == [
+            {
+                "method": "external-service/signin",
+                "scope": "applications/bucket/app/external_services/sample-external-service",
+            }
+        ]

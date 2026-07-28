@@ -8,9 +8,9 @@ The bridge does not validate or restrict the destination host of an outbound req
 
 ## Credentials and headers
 
-DIAL external-service credentials are fetched per request and injected through request-local context. A failure to resolve credentials fails the call. The bridge does not retain DIAL credentials in cache entries.
+DIAL external-service credentials are fetched per request and injected through request-local context. A failure to resolve credentials returns an MCP error result carrying a `_meta["dial.epam.com/error"].status_code`: `404` when the service isn't configured on the application, `401` (with a `_meta["dial.epam.com/auth-challenge"]` signin challenge) when it's configured but the user hasn't signed in yet — see [Configuration Reference](../CONFIGURATION.md#dial-credentials). The bridge does not retain DIAL credentials in cache entries.
 
-Client-forwarded headers require `OUTBOUND_HEADER_ALLOWLIST`. Authorization, cookies, proxy/routing, and forwarding headers are blocked from generic forwarding.
+Client-forwarded headers are gated by a block list (authorization, cookies, proxy/routing, and forwarding headers by default) and, only when `OUTBOUND_HEADER_ALLOWLIST` is explicitly set, an additional allowlist restricting forwarding to the listed names. Both the block list and the allowlist are operator-overridable via env vars (`OUTBOUND_HEADER_BLOCKLIST`, `OUTBOUND_HEADER_ALLOWLIST`) — see [Configuration Reference](../CONFIGURATION.md#outbound-header-forwarding). Loosening the block list also loosens which header name a DIAL-resolved credential is allowed to use.
 
 ## Logging
 

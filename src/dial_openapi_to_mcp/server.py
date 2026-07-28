@@ -90,16 +90,28 @@ def _safe_destination(url: httpx.URL) -> str:
     return f"{url.scheme}://{url.host}{url.path}"
 
 
+def _resolve_blocked_forwarded_headers() -> set[str]:
+    """Operator-overridable block set; unset OUTBOUND_HEADER_BLOCKLIST keeps the default."""
+    raw = os.environ.get("OUTBOUND_HEADER_BLOCKLIST")
+    if raw is None:
+        return _BLOCKED_FORWARDED_HEADERS
+    return {name.strip().lower() for name in raw.split(",") if name.strip()}
+
+
 def _validate_extra_headers(raw_headers: Any) -> list[dict[str, str]]:
-    """Accept only explicitly allowlisted non-sensitive forwarded headers."""
+    """Reject blocked forwarded headers; if OUTBOUND_HEADER_ALLOWLIST is explicitly set,
+    also require forwarded headers to be named in it."""
     if not isinstance(raw_headers, list):
         raise ValueError("extra_headers must be a JSON array")
 
-    allowlist = {
-        name.strip().lower()
-        for name in os.getenv("OUTBOUND_HEADER_ALLOWLIST", "").split(",")
-        if name.strip()
-    }
+    blocked = _resolve_blocked_forwarded_headers()
+    allowlist_raw = os.environ.get("OUTBOUND_HEADER_ALLOWLIST")
+    allowlist = (
+        {name.strip().lower() for name in allowlist_raw.split(",") if name.strip()}
+        if allowlist_raw is not None
+        else None
+    )
+
     validated = []
     for entry in raw_headers:
         if not isinstance(entry, dict):
@@ -109,7 +121,7 @@ def _validate_extra_headers(raw_headers: Any) -> list[dict[str, str]]:
         if not isinstance(name, str) or not isinstance(value, str):
             raise ValueError("extra_headers entries require string name and value")
         normalized_name = name.lower()
-        if normalized_name in _BLOCKED_FORWARDED_HEADERS or normalized_name not in allowlist:
+        if normalized_name in blocked or (allowlist is not None and normalized_name not in allowlist):
             raise ValueError(f"Forwarding header {name!r} is not permitted")
         validated.append({"name": name, "value": value})
     return validated
@@ -138,9 +150,19 @@ def _normalize_spec_to_json(spec: Any) -> str:
 class DialCredentialsError(Exception):
     """Raised when ai_dial_config.external_service is set but credentials can't be resolved."""
 
-    def __init__(self, message: str, external_service: str):
+    def __init__(
+        self,
+        message: str,
+        external_service: str,
+        status_code: int = 500,
+        www_authenticate: Optional[str] = None,
+        scope: Optional[str] = None,
+    ):
         super().__init__(message)
         self.external_service = external_service
+        self.status_code = status_code
+        self.www_authenticate = www_authenticate
+        self.scope = scope
 
 
 async def _fetch_dial_credentials(
@@ -148,11 +170,15 @@ async def _fetch_dial_credentials(
     application: str,
     external_service: str,
     per_request_key: str,
-) -> Optional[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     1. GET /v1/{application} — verify external_service is configured (application = "applications/{bucket}/{id}").
     2. POST /v1/ops/external-service/credentials — retrieve the live credential header.
-    Returns {"header_name": str, "header_value": str, "expires_at": int|None} or None.
+    Returns {"header_name": str, "header_value": str, "expires_at": int|None}.
+
+    Raises DialCredentialsError with status_code=404 when external_service isn't configured
+    on the application, and status_code=401 (with a www_authenticate challenge) when it's
+    configured but DIAL core has no stored credential for it yet (the user needs to log in).
     """
     base = dial_url.rstrip("/")
     auth = {"Api-Key": per_request_key}
@@ -161,20 +187,37 @@ async def _fetch_dial_credentials(
         app_resp.raise_for_status()
         external_services = app_resp.json().get("external_services") or {}
         if external_service not in external_services:
-            logger.warning(
-                "DIAL external service %r not found in application %r",
-                external_service,
-                application,
+            msg = (
+                f"External service {external_service!r} not found in application "
+                f"{application!r} external_services registry"
             )
-            return None
+            logger.warning(msg)
+            raise DialCredentialsError(msg, external_service, status_code=404)
 
         scope = f"{application}/external_services/{external_service}"
-        cred_resp = await client.post(
-            f"{base}/v1/ops/external-service/credentials",
-            headers=auth,
-            json={"url": scope},
-        )
-        cred_resp.raise_for_status()
+        try:
+            cred_resp = await client.post(
+                f"{base}/v1/ops/external-service/credentials",
+                headers=auth,
+                json={"url": scope},
+            )
+            cred_resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                www_authenticate = (
+                    f'DIAL-External-Service url="{scope}", method="external-service/signin"'
+                )
+                msg = f"Sign-in required for external service {external_service!r}."
+                logger.warning(msg)
+                raise DialCredentialsError(
+                    msg,
+                    external_service,
+                    status_code=401,
+                    www_authenticate=www_authenticate,
+                    scope=scope,
+                ) from e
+            raise
+
         data = cred_resp.json()
         return {
             "header_name": data["header_name"],
@@ -224,6 +267,8 @@ async def _resolve_dial_credentials(request: Request) -> Optional[Dict[str, Any]
         creds = await _fetch_dial_credentials(
             dial_url, application, external_service, per_request_key
         )
+    except DialCredentialsError:
+        raise
     except httpx.HTTPStatusError as e:
         msg = f"Failed to fetch DIAL credentials for {external_service!r}: DIAL core returned {e.response.status_code} {e.response.reason_phrase}"
         logger.error(msg)
@@ -232,11 +277,6 @@ async def _resolve_dial_credentials(request: Request) -> Optional[Dict[str, Any]
         msg = f"Failed to fetch DIAL credentials for {external_service!r}: {e}"
         logger.error(msg)
         raise DialCredentialsError(msg, external_service) from e
-
-    if creds is None:
-        msg = f"External service {external_service!r} not found in application {application!r} external_services registry"
-        logger.error(msg)
-        raise DialCredentialsError(msg, external_service)
 
     return creds
 
@@ -948,22 +988,49 @@ class OpenAPI2MCPBridge(Middleware):
 
             logger.info(f"Executing '{tool_name}' from {cache_entry.name}")
 
-            # DialCredentialsError propagates out (see outer except below): the tool must
-            # not be called without auth, and raising — rather than returning a ToolResult
-            # with a mismatched shape — avoids tripping the MCP server's structured-output
-            # validation against the real tool's outputSchema.
-            dial_creds = await _resolve_dial_credentials(request)
+            # ToolResult(meta=..., is_error=True) skips structured_content entirely, so
+            # to_mcp_result() returns a CallToolResult directly and the MCP SDK never
+            # runs jsonschema validation against the real tool's outputSchema.
+            try:
+                dial_creds = await _resolve_dial_credentials(request)
+            except DialCredentialsError as e:
+                meta: dict[str, Any] = {
+                    "dial.epam.com/error": {
+                        "status_code": e.status_code,
+                        "external_service": e.external_service,
+                    }
+                }
+                if e.status_code == 401 and e.scope:
+                    meta["dial.epam.com/auth-challenge"] = [
+                        {"method": "external-service/signin", "scope": e.scope}
+                    ]
+                return ToolResult(content=str(e), is_error=True, meta=meta)
+
             credential_token = None
             if dial_creds:
                 header_name = dial_creds.get("header_name")
                 header_value = dial_creds.get("header_value")
                 if not isinstance(header_name, str) or not isinstance(header_value, str):
-                    raise DialCredentialsError(
-                        "DIAL core returned an invalid credential", "unknown"
+                    return ToolResult(
+                        content="DIAL core returned an invalid credential",
+                        is_error=True,
+                        meta={
+                            "dial.epam.com/error": {
+                                "status_code": 500,
+                                "external_service": "unknown",
+                            }
+                        },
                     )
-                if header_name.lower() in _BLOCKED_FORWARDED_HEADERS:
-                    raise DialCredentialsError(
-                        "DIAL core returned a prohibited credential header", "unknown"
+                if header_name.lower() in _resolve_blocked_forwarded_headers():
+                    return ToolResult(
+                        content="DIAL core returned a prohibited credential header",
+                        is_error=True,
+                        meta={
+                            "dial.epam.com/error": {
+                                "status_code": 500,
+                                "external_service": "unknown",
+                            }
+                        },
                     )
                 credential_token = _REQUEST_CREDENTIAL.set((header_name, header_value))
 
