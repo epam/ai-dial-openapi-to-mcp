@@ -4,11 +4,14 @@ FILES ?= $(SRC_DIRS)
 POETRY ?= poetry
 PYTHON ?= python3
 
+# Any non-empty CI value (even 'false' or '0') means that CI is enabled
+CI ?=
+
 .PHONY: init_venv install install_dev format lint mypy test test_cov \
 	black black_check isort isort_check autoflake autoflake_check flake8
 
 init_venv:
-	$(POETRY) env use $(PYTHON)
+	$(if $(CI),,$(POETRY) env use $(PYTHON))
 
 install: init_venv
 	$(POETRY) install
