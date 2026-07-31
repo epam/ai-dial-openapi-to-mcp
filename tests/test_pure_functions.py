@@ -24,26 +24,11 @@ def test_get_api_id_different_base_url():
     assert get_api_id(spec, "https://a.com") != get_api_id(spec, "https://b.com")
 
 
-def test_get_api_id_extra_headers_change_id():
+def test_get_api_id_depends_only_on_definition_inputs():
     spec = {"openapi": "3.0.0"}
     base = "https://example.com"
-    no_headers = get_api_id(spec, base, None)
-    with_headers = get_api_id(spec, base, [{"name": "X-Key", "value": "secret"}])
-    assert no_headers != with_headers
 
-
-def test_get_api_id_ignores_extra_header_values():
-    spec = {"openapi": "3.0.0"}
-    base = "https://example.com"
-    a = get_api_id(spec, base, [{"name": "X-Key", "value": "aaa"}])
-    b = get_api_id(spec, base, [{"name": "X-Key", "value": "bbb"}])
-    assert a == b
-
-
-def test_get_api_id_empty_extra_headers_same_as_none():
-    spec = {"openapi": "3.0.0"}
-    base = "https://example.com"
-    assert get_api_id(spec, base, None) == get_api_id(spec, base, None)
+    assert get_api_id(spec, base) == get_api_id(spec, base)
 
 
 # ---------------------------------------------------------------------------

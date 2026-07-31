@@ -94,28 +94,40 @@ class MCPCache:
 
     async def get_or_create(self, api_id: str, factory) -> CacheEntry:
         """Create one entry per key; followers await the same creation result."""
-        cached = await self.get(api_id)
-        if cached is not None:
-            return cached
-
+        expired: CacheEntry | None = None
         creator = False
         async with self._lock:
+            cached = self._cache.get(api_id)
+            if cached is not None and not cached.is_expired(self._ttl_seconds):
+                cached.touch()
+                self._cache.move_to_end(api_id)
+                self._stats["hits"] += 1
+                return cached
+            if cached is not None:
+                expired = self._cache.pop(api_id)
+                self._stats["expirations"] += 1
+            self._stats["misses"] += 1
+
             pending = self._pending.get(api_id)
             if pending is None:
                 pending = asyncio.get_running_loop().create_future()
                 self._pending[api_id] = pending
                 creator = True
+
+        await self._close(expired)
         if not creator:
-            return await pending
+            return await asyncio.shield(pending)
 
         try:
             entry = await factory()
             await self.set(api_id, entry)
-            pending.set_result(entry)
+            if not pending.done():
+                pending.set_result(entry)
             return entry
         except BaseException as error:
             if not pending.done():
                 pending.set_exception(error)
+                # Mark the exception retrieved if every follower is cancelled.
                 pending.exception()
             raise
         finally:

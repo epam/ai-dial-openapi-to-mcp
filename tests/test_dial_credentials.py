@@ -163,9 +163,7 @@ async def test_service_not_in_registry_status_code_propagates(monkeypatch):
             status_code=404,
         )
 
-    monkeypatch.setattr(
-        "dial_openapi_to_mcp.server._fetch_dial_credentials", _not_in_registry
-    )
+    monkeypatch.setattr("dial_openapi_to_mcp.server._fetch_dial_credentials", _not_in_registry)
 
     request = _make_request(
         _dial_body(),
@@ -241,9 +239,7 @@ async def test_fetch_dial_credentials_401_when_no_stored_credential():
 
     def _handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/applications/bucket/app":
-            return httpx.Response(
-                200, json={"external_services": {"sample-external-service": {}}}
-            )
+            return httpx.Response(200, json={"external_services": {"sample-external-service": {}}})
         assert request.url.path == "/v1/ops/external-service/credentials"
         return httpx.Response(404, json={"error": "not found"})
 

@@ -6,6 +6,10 @@ Main entry point for running the OpenAPI to MCP server
 def main() -> None:
     import os
 
+    from dotenv import load_dotenv
+
+    load_dotenv(override=False)
+
     from .server import mcp
 
     mcp.run(

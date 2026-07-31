@@ -5,14 +5,17 @@ services:
       dockerfile: Dockerfile
     image: ghcr.io/epam/ai-dial-openapi-to-mcp:development
     environment:
-      MCP_PORT: ${MCP_PORT:-8080}
+      MCP_PORT: "8080"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MCP_CACHE_MAX_SIZE: ${MCP_CACHE_MAX_SIZE:-100}
       MCP_CACHE_TTL: ${MCP_CACHE_TTL:-3600}
       MCP_CACHE_CLEANUP_INTERVAL: ${MCP_CACHE_CLEANUP_INTERVAL:-300}
+      DIAL_URL: ${DIAL_URL:-}
+      DIAL_CORE_URL: ${DIAL_CORE_URL:-}
       OUTBOUND_HEADER_ALLOWLIST: ${OUTBOUND_HEADER_ALLOWLIST:-}
+      OUTBOUND_HEADER_BLOCKLIST: ${OUTBOUND_HEADER_BLOCKLIST-authorization,cookie,set-cookie,proxy-authorization,host,connection,keep-alive,proxy-authenticate,te,trailer,transfer-encoding,upgrade,forwarded,x-forwarded-for,x-forwarded-host,x-forwarded-proto}
     ports:
-      - "${MCP_PORT:-8080}:8080"
+      - "${HOST_PORT:-8080}:8080"
     restart: unless-stopped
 
   sample-api:

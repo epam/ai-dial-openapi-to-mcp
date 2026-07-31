@@ -7,7 +7,7 @@ PYTHON ?= python3
 # Any non-empty CI value (even 'false' or '0') means that CI is enabled
 CI ?=
 
-.PHONY: init_venv install install_dev format lint mypy test test_cov \
+.PHONY: init_venv install install_dev format lint mypy pyright test test_cov test_cov_all \
 	black black_check isort isort_check autoflake autoflake_check flake8
 
 init_venv:
@@ -31,9 +31,13 @@ lint: install_dev
 	$(POETRY) run isort $(SRC_DIRS) --check-only --diff
 	$(POETRY) run autoflake $(SRC_DIRS) --check
 	$(POETRY) run mypy --show-error-codes $(MYPY_DIRS)
+	$(POETRY) run pyright $(MYPY_DIRS)
 
 mypy: install_dev
 	$(POETRY) run mypy --show-error-codes $(MYPY_DIRS)
+
+pyright: install_dev
+	$(POETRY) run pyright $(MYPY_DIRS)
 
 black: install_dev
 	$(POETRY) run black $(FILES)
@@ -60,4 +64,9 @@ test: install_dev
 	$(POETRY) run pytest tests -m "not integration" $(ARGS)
 
 test_cov: install_dev
-	$(POETRY) run pytest tests -m "not integration" --cov=src/dial_openapi_to_mcp --cov-report=term-missing $(ARGS)
+	$(POETRY) run pytest tests -m "not integration" --cov=src/dial_openapi_to_mcp --cov-report=term-missing --cov-fail-under=60 $(ARGS)
+
+# Includes the real-server integration suite; slower, but the representative
+# baseline for total coverage since much of server.py is only exercised end-to-end.
+test_cov_all: install_dev
+	$(POETRY) run pytest tests --cov=src/dial_openapi_to_mcp --cov-report=term-missing --cov-fail-under=70 $(ARGS)

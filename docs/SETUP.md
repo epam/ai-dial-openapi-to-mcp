@@ -1,13 +1,40 @@
 # Setup Guide
 
-Setup instructions now live in the [main README](../README.md) and the [configuration reference](../CONFIGURATION.md).
+## Prerequisites
 
-Use the supported local workflow:
+- Python 3.13
+- Poetry 2.x
+- Docker, optionally, for container verification
+
+## Install and run
 
 ```bash
+git clone https://github.com/epam/ai-dial-openapi-to-mcp.git
+cd ai-dial-openapi-to-mcp
 cp .env.template .env
-make install_dev
-openapi-to-mcp
+poetry install --with dev
+poetry run openapi-to-mcp
 ```
 
-For secure container deployment, see the [README](../README.md#local-development) and [security model](security.md).
+The CLI loads `.env` at startup. Do not commit `.env` or place real credentials in examples, logs, issue reports, or test fixtures. The streamable HTTP endpoint is available at `http://localhost:8080/mcp`.
+
+Run with the module entry point if preferred:
+
+```bash
+poetry run python -m dial_openapi_to_mcp
+```
+
+Run local checks with Poetry:
+
+```bash
+poetry run black --check src tests
+poetry run isort --check-only src tests
+poetry run flake8 src tests
+poetry run mypy src
+poetry run pyright
+poetry run pytest
+```
+
+The bridge accepts client-selected destinations; it does not require a destination allowlist or external egress control. Deploy it behind authenticated ingress, and add network restrictions only when required by your environment.
+
+See the [configuration reference](../CONFIGURATION.md), [main README](../README.md), and [security model](security.md) for operational details.

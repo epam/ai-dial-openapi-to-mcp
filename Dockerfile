@@ -20,6 +20,7 @@ RUN apk update && apk upgrade --no-cache libcrypto3 libssl3 libexpat zlib musl m
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    MCP_PORT=8080 \
     LOG_LEVEL=INFO \
     PATH="/app/.venv/bin:$PATH"
 

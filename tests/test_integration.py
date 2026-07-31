@@ -89,13 +89,16 @@ async def test_get_or_create_mcp_blocklist_override_replaces_default(monkeypatch
     assert entry is not None
 
     blocked_request = _make_request(
-        {
-            "params": {
-                "_meta": {"extra_headers": [{"name": "X-Custom-Blocked", "value": "v"}]}
-            }
-        }
+        {"params": {"_meta": {"extra_headers": [{"name": "X-Custom-Blocked", "value": "v"}]}}}
     )
     assert await get_or_create_mcp(spec_json, blocked_request) is None
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_mcp_rejects_non_object_spec():
+    request = _make_request({"params": {}})
+
+    assert await get_or_create_mcp(json.dumps(["not", "an", "object"]), request) is None
 
 
 @pytest.mark.asyncio
