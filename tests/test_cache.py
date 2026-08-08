@@ -72,6 +72,32 @@ async def test_cache_get_or_create_is_single_flight():
 
 
 @pytest.mark.asyncio
+async def test_cancelled_follower_does_not_cancel_shared_creation():
+    cache = MCPCache()
+    release_factory = asyncio.Event()
+    calls = 0
+
+    async def factory():
+        nonlocal calls
+        calls += 1
+        await release_factory.wait()
+        return _entry("shared")
+
+    creator = asyncio.create_task(cache.get_or_create("shared", factory))
+    follower = asyncio.create_task(cache.get_or_create("shared", factory))
+    await asyncio.sleep(0)
+    follower.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await follower
+
+    release_factory.set()
+    entry = await creator
+
+    assert calls == 1
+    assert await cache.get("shared") is entry
+
+
+@pytest.mark.asyncio
 async def test_zero_cleanup_interval_does_not_create_task():
     cache = MCPCache(cleanup_interval=0)
 

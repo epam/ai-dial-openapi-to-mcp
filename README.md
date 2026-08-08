@@ -8,25 +8,36 @@
 
 OpenAPI to MCP is a DIAL-compatible bridge that creates MCP tools from a client-supplied OpenAPI 3.x document. Clients send the document and an API destination in MCP metadata; the bridge creates tools with FastMCP and reuses safe process-local definitions.
 
-The bridge is an outbound network client. Deploy it behind authenticated ingress, and rely on external network egress controls (a firewall or egress proxy) to restrict which destinations it can reach — the bridge does not restrict outbound destinations itself.
-
 ## Quick highlights
 
 - Creates MCP tools dynamically from OpenAPI 3.x JSON or YAML.
 - Supports optional `x-mcp` names, descriptions, and parameter descriptions.
 - Converts Swagger 2.0 documents to OpenAPI 3.0 through `openapi_convert`.
 - Resolves DIAL external-service credentials per request and fails closed when resolution fails.
-- Restricts forwarded headers by operator configuration.
+- Controls forwarded headers through an operator-configured block list and optional allowlist.
+- Keeps all forwarded header values and credentials request-scoped; cached entries contain no header values.
 - Runs as a non-root container and publishes images to GitHub Container Registry.
 
 ## Documentation
 
 - [Configuration reference](CONFIGURATION.md)
 - [Technical documentation](docs/README.md)
+- [Setup guide](docs/SETUP.md)
 - [Security model](SECURITY.md)
+- [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
 
-## Quick start (general)
+## Quick start
+
+```bash
+git clone https://github.com/epam/ai-dial-openapi-to-mcp.git
+cd ai-dial-openapi-to-mcp
+cp .env.template .env
+poetry install --with dev
+poetry run openapi-to-mcp
+```
+
+Or, with `make`:
 
 ```bash
 git clone https://github.com/epam/ai-dial-openapi-to-mcp.git
@@ -36,10 +47,10 @@ make install_dev
 openapi-to-mcp
 ```
 
-The streamable HTTP endpoint is available at `http://localhost:8080/mcp`.
+The CLI loads `.env` at startup. The streamable HTTP endpoint is available at `http://localhost:8080/mcp`.
 
-> [!IMPORTANT]
-> The bridge relies on external network egress controls to restrict outbound destinations. Deploy it only in an environment where such a control (firewall, egress proxy, network policy) already exists.
+> [!WARNING]
+> OpenAPI documents, destinations, tool arguments, and request headers are untrusted and may contain sensitive data. Run the bridge behind authenticated ingress, grant access only to trusted clients, and never publish real credentials in examples, logs, issues, or test fixtures.
 
 ## Configuration
 
@@ -52,27 +63,32 @@ OUTBOUND_HEADER_ALLOWLIST=x-request-id
 LOG_LEVEL=INFO
 ```
 
-## Local Development
+`OUTBOUND_HEADER_ALLOWLIST` has three distinct states: unset allows every header not blocked by `OUTBOUND_HEADER_BLOCKLIST`; explicitly empty permits no client-forwarded headers; a populated value restricts forwarding to the listed names. Header values remain request-scoped in every mode and are not stored in cache entries.
 
-### Pre-requisites
+## Local development
+
+### Prerequisites
 
 1. Python 3.13.
-2. [Poetry](https://python-poetry.org/) 2.x for the current repository workflow.
+2. [Poetry](https://python-poetry.org/) 2.x.
 3. Docker, optionally, for container verification.
 
-### Setup
+### Setup and run
+
+```bash
+cp .env.template .env
+poetry install --with dev
+poetry run openapi-to-mcp
+# or
+poetry run python -m dial_openapi_to_mcp
+```
+
+Or, with `make`:
 
 ```bash
 cp .env.template .env
 make install_dev
-```
-
-### Run
-
-```bash
 openapi-to-mcp
-# or
-python -m dial_openapi_to_mcp
 ```
 
 Run the container:
@@ -81,13 +97,24 @@ Run the container:
 docker compose up --build
 ```
 
-### Utils
+### Checks
 
 ```bash
-make format
-make lint
-make test
-make test_cov
+poetry run black --check src tests
+poetry run isort --check-only src tests
+poetry run flake8 src tests
+poetry run mypy src
+poetry run pyright
+poetry run pytest
+poetry run pytest --cov=dial_openapi_to_mcp
+```
+
+Or, with `make` (each target bundles several of the checks above):
+
+```bash
+make lint       # black --check, isort --check, flake8, autoflake --check, mypy, pyright, poetry check --lock
+make test       # unit tests only
+make test_cov   # unit tests with coverage report and floor
 ```
 
 ## MCP usage

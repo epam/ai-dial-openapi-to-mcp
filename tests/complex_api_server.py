@@ -151,6 +151,16 @@ async def secret_animal(request: Request) -> JSONResponse:
     return JSONResponse({"secret": "There are 3 animals in total"})
 
 
+async def echo_api_key(request: Request) -> JSONResponse:
+    """Expose the test-only forwarded key to verify request isolation."""
+    return JSONResponse({"api_key": request.headers.get("x-api-key")})
+
+
+async def echo_upstream_token(request: Request) -> JSONResponse:
+    """Expose the resolved DIAL credential header to verify request isolation."""
+    return JSONResponse({"upstream_token": request.headers.get("x-upstream-token")})
+
+
 # ---------------------------------------------------------------------------
 # ASGI app
 # ---------------------------------------------------------------------------
@@ -162,6 +172,8 @@ animal_api_app = Starlette(
         Route("/animals", create_animal, methods=["POST"]),
         Route("/animals/search", search_animals, methods=["POST"]),
         Route("/animals/secret", secret_animal, methods=["GET"]),
+        Route("/animals/echo-api-key", echo_api_key, methods=["GET"]),
+        Route("/animals/echo-upstream-token", echo_upstream_token, methods=["GET"]),
         Route("/animals/{animal_id}", get_animal, methods=["GET"]),
         Route("/animals/{animal_id}/tricks", get_tricks, methods=["GET"]),
     ]
@@ -237,6 +249,46 @@ ANIMAL_OPENAPI_SPEC = {
                                 "schema": {
                                     "type": "array",
                                     "items": {"$ref": "#/components/schemas/Animal"},
+                                }
+                            }
+                        },
+                    }
+                },
+            }
+        },
+        "/animals/echo-api-key": {
+            "get": {
+                "operationId": "echo_api_key",
+                "summary": "Return the test-only forwarded API key",
+                "responses": {
+                    "200": {
+                        "description": "Forwarded header value",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {"api_key": {"type": "string"}},
+                                }
+                            }
+                        },
+                    }
+                },
+            }
+        },
+        "/animals/echo-upstream-token": {
+            "get": {
+                "operationId": "echo_upstream_token",
+                "summary": "Return the test-only resolved DIAL credential header",
+                "responses": {
+                    "200": {
+                        "description": "Forwarded header value",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "upstream_token": {"type": "string", "nullable": True}
+                                    },
                                 }
                             }
                         },

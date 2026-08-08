@@ -12,6 +12,7 @@ Both servers run in background daemon threads so they don't interfere
 with the pytest-asyncio event loop used by test coroutines.
 """
 
+import asyncio
 import json
 import os
 import socket
@@ -25,6 +26,8 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 from complex_api_server import ANIMAL_OPENAPI_SPEC, animal_api_app
+
+pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -135,6 +138,70 @@ def bridge_server(api_server: str) -> Iterator[str]:
             os.environ[name] = value
 
 
+def _make_fake_dial_core_app(*, configured_services: set[str], has_stored_credential: bool):
+    """Minimal fake DIAL core: GET /v1/{application} reports which external_services
+    are configured; POST /v1/ops/external-service/credentials 404s unless a stored
+    credential is simulated."""
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def get_application(request):
+        return JSONResponse({"external_services": {name: {} for name in configured_services}})
+
+    async def post_credentials(request):
+        if not has_stored_credential:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        # Derive the resolved token from the caller's own Api-Key so that two
+        # different callers resolve to two different, verifiable credentials.
+        caller_key = request.headers.get("api-key", "")
+        return JSONResponse(
+            {
+                "header_name": "X-Upstream-Token",
+                "header_value": f"tok-for-{caller_key}",
+                "expires_at": None,
+            }
+        )
+
+    return Starlette(
+        routes=[
+            Route("/v1/{application:path}", get_application, methods=["GET"]),
+            Route("/v1/ops/external-service/credentials", post_credentials, methods=["POST"]),
+        ]
+    )
+
+
+@pytest.fixture
+def fake_dial_core_not_configured() -> Iterator[str]:
+    app = _make_fake_dial_core_app(configured_services=set(), has_stored_credential=False)
+    port = _free_port()
+    server, thread = _start_server_thread(app, port)
+    yield f"http://127.0.0.1:{port}"
+    _stop_server_thread(server, thread)
+
+
+@pytest.fixture
+def fake_dial_core_needs_signin() -> Iterator[str]:
+    app = _make_fake_dial_core_app(
+        configured_services={"sample-external-service"}, has_stored_credential=False
+    )
+    port = _free_port()
+    server, thread = _start_server_thread(app, port)
+    yield f"http://127.0.0.1:{port}"
+    _stop_server_thread(server, thread)
+
+
+@pytest.fixture
+def fake_dial_core_success() -> Iterator[str]:
+    app = _make_fake_dial_core_app(
+        configured_services={"sample-external-service"}, has_stored_credential=True
+    )
+    port = _free_port()
+    server, thread = _start_server_thread(app, port)
+    yield f"http://127.0.0.1:{port}"
+    _stop_server_thread(server, thread)
+
+
 # ---------------------------------------------------------------------------
 # Function-scoped async fixtures  (fresh MCP session per test)
 # ---------------------------------------------------------------------------
@@ -161,6 +228,21 @@ async def mcp_client_with_api_key(bridge_server: str, api_server: str):
             "X-META": json.dumps(ANIMAL_OPENAPI_SPEC),
             "X-BASE-URL": api_server,
             "X-EXTRA-HEADERS": json.dumps([{"name": "X-API-Key", "value": "test-secret"}]),
+        },
+    )
+    async with Client(transport) as client:
+        yield client
+
+
+@pytest.fixture
+async def mcp_client_with_dial_headers(bridge_server: str, api_server: str):
+    transport = StreamableHttpTransport(
+        url=bridge_server,
+        headers={
+            "X-META": json.dumps(ANIMAL_OPENAPI_SPEC),
+            "X-BASE-URL": api_server,
+            "x-dial-application-id": "applications/bucket/app",
+            "api-key": "secret",
         },
     )
     async with Client(transport) as client:
@@ -310,6 +392,50 @@ class TestSearch:
 
 
 class TestExtraHeaders:
+    async def test_cached_client_keeps_forwarded_headers_request_scoped(
+        self, bridge_server: str, api_server: str
+    ):
+        def client_for(key: str) -> Client:
+            return Client(
+                StreamableHttpTransport(
+                    url=bridge_server,
+                    headers={
+                        "X-META": json.dumps(ANIMAL_OPENAPI_SPEC),
+                        "X-BASE-URL": api_server,
+                        "X-EXTRA-HEADERS": json.dumps([{"name": "X-API-Key", "value": key}]),
+                    },
+                )
+            )
+
+        async with client_for("caller-one") as first:
+            first_result = _parse_result(await first.call_tool("echo_api_key", {}))
+        async with client_for("caller-two") as second:
+            second_result = _parse_result(await second.call_tool("echo_api_key", {}))
+
+        assert first_result == {"api_key": "caller-one"}
+        assert second_result == {"api_key": "caller-two"}
+
+    async def test_concurrent_callers_keep_forwarded_headers_isolated(
+        self, bridge_server: str, api_server: str
+    ):
+        async def call_with(key: str) -> object:
+            transport = StreamableHttpTransport(
+                url=bridge_server,
+                headers={
+                    "X-META": json.dumps(ANIMAL_OPENAPI_SPEC),
+                    "X-BASE-URL": api_server,
+                    "X-EXTRA-HEADERS": json.dumps([{"name": "X-API-Key", "value": key}]),
+                },
+            )
+            async with Client(transport) as client:
+                return _parse_result(await client.call_tool("echo_api_key", {}))
+
+        first_result, second_result = await asyncio.gather(
+            call_with("caller-one"), call_with("caller-two")
+        )
+
+        assert {first_result["api_key"], second_result["api_key"]} == {"caller-one", "caller-two"}
+
     async def test_secret_endpoint_without_api_key_returns_error(self, mcp_client: Client):
         with pytest.raises(Exception, match="401"):
             await mcp_client.call_tool("get_secret_info", {})
@@ -337,3 +463,169 @@ class TestDialCredentialsMisconfig:
         text = result.content[0].text
         assert "external_service" in text
         assert "x-dial-application-id" in text
+        assert result.meta["dial.epam.com/error"]["status_code"] == 500
+        assert result.meta["dial.epam.com/error"]["external_service"] == "sample-external-service"
+
+    async def test_external_service_not_configured_returns_404_meta(
+        self,
+        mcp_client_with_dial_headers: Client,
+        fake_dial_core_not_configured: str,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("DIAL_URL", fake_dial_core_not_configured)
+        result = await mcp_client_with_dial_headers.call_tool(
+            "list_animals",
+            {},
+            meta={"ai_dial_config": {"external_service": "sample-external-service"}},
+            raise_on_error=False,
+        )
+        assert result.is_error
+        assert result.meta["dial.epam.com/error"] == {
+            "status_code": 404,
+            "external_service": "sample-external-service",
+        }
+        assert "dial.epam.com/auth-challenge" not in result.meta
+
+    async def test_external_service_needs_signin_returns_401_challenge(
+        self,
+        mcp_client_with_dial_headers: Client,
+        fake_dial_core_needs_signin: str,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("DIAL_URL", fake_dial_core_needs_signin)
+        result = await mcp_client_with_dial_headers.call_tool(
+            "list_animals",
+            {},
+            meta={"ai_dial_config": {"external_service": "sample-external-service"}},
+            raise_on_error=False,
+        )
+        assert result.is_error
+        assert result.meta["dial.epam.com/error"] == {
+            "status_code": 401,
+            "external_service": "sample-external-service",
+        }
+        assert result.meta["dial.epam.com/auth-challenge"] == [
+            {
+                "method": "external-service/signin",
+                "scope": "applications/bucket/app/external_services/sample-external-service",
+            }
+        ]
+
+
+class TestDialCredentialIsolation:
+    """Two callers sharing one cached MCP entry must never see each other's
+    resolved DIAL credential. `fake_dial_core_success` derives the resolved
+    token from each caller's own Api-Key, so a leaked/crossed credential is
+    directly observable in the echoed `upstream_token`."""
+
+    @staticmethod
+    def _client(bridge_server: str, api_server: str, api_key: str) -> Client:
+        return Client(
+            StreamableHttpTransport(
+                url=bridge_server,
+                headers={
+                    "X-META": json.dumps(ANIMAL_OPENAPI_SPEC),
+                    "X-BASE-URL": api_server,
+                    "x-dial-application-id": "applications/bucket/app",
+                    "api-key": api_key,
+                },
+            )
+        )
+
+    async def _call_echo_upstream_token(
+        self, bridge_server: str, api_server: str, api_key: str
+    ) -> object:
+        async with self._client(bridge_server, api_server, api_key) as client:
+            return _parse_result(
+                await client.call_tool(
+                    "echo_upstream_token",
+                    {},
+                    meta={"ai_dial_config": {"external_service": "sample-external-service"}},
+                )
+            )
+
+    async def test_sequential_callers_get_isolated_dial_credentials(
+        self, bridge_server: str, api_server: str, fake_dial_core_success: str, monkeypatch
+    ):
+        monkeypatch.setenv("DIAL_URL", fake_dial_core_success)
+
+        first = await self._call_echo_upstream_token(bridge_server, api_server, "caller-one-key")
+        second = await self._call_echo_upstream_token(bridge_server, api_server, "caller-two-key")
+
+        assert first == {"upstream_token": "tok-for-caller-one-key"}
+        assert second == {"upstream_token": "tok-for-caller-two-key"}
+
+    async def test_concurrent_callers_keep_dial_credentials_isolated(
+        self, bridge_server: str, api_server: str, fake_dial_core_success: str, monkeypatch
+    ):
+        monkeypatch.setenv("DIAL_URL", fake_dial_core_success)
+
+        first, second = await asyncio.gather(
+            self._call_echo_upstream_token(bridge_server, api_server, "caller-one-key"),
+            self._call_echo_upstream_token(bridge_server, api_server, "caller-two-key"),
+        )
+
+        assert {first["upstream_token"], second["upstream_token"]} == {
+            "tok-for-caller-one-key",
+            "tok-for-caller-two-key",
+        }
+
+    async def test_credential_context_is_reset_after_a_failed_call(
+        self, bridge_server: str, api_server: str, fake_dial_core_success: str, monkeypatch
+    ):
+        """A downstream failure must not leave the DIAL credential bound in
+        context for the next caller sharing the same cached MCP entry."""
+        monkeypatch.setenv("DIAL_URL", fake_dial_core_success)
+
+        async with self._client(bridge_server, api_server, "caller-with-error") as client:
+            with pytest.raises(Exception, match="404"):
+                await client.call_tool(
+                    "get_animal",
+                    {"animal_id": 9999},
+                    meta={"ai_dial_config": {"external_service": "sample-external-service"}},
+                )
+
+        async with self._client(bridge_server, api_server, "caller-with-error") as no_dial_client:
+            # Same cached MCP entry (same spec + base_url), no DIAL credential requested
+            # this time — the previous caller's resolved token must not leak through.
+            result = _parse_result(await no_dial_client.call_tool("echo_upstream_token", {}))
+
+        assert result == {"upstream_token": None}
+
+    async def test_secret_values_are_not_logged(
+        self,
+        bridge_server: str,
+        api_server: str,
+        fake_dial_core_success: str,
+        monkeypatch,
+        caplog,
+    ):
+        monkeypatch.setenv("DIAL_URL", fake_dial_core_success)
+        secret_api_key = "super-secret-caller-key"
+        secret_extra_header_value = "super-secret-extra-header-value"
+
+        with caplog.at_level("DEBUG", logger="dial_openapi_to_mcp.server"):
+            async with Client(
+                StreamableHttpTransport(
+                    url=bridge_server,
+                    headers={
+                        "X-META": json.dumps(ANIMAL_OPENAPI_SPEC),
+                        "X-BASE-URL": api_server,
+                        "x-dial-application-id": "applications/bucket/app",
+                        "api-key": secret_api_key,
+                        "X-EXTRA-HEADERS": json.dumps(
+                            [{"name": "X-API-Key", "value": secret_extra_header_value}]
+                        ),
+                    },
+                )
+            ) as client:
+                await client.call_tool(
+                    "echo_upstream_token",
+                    {},
+                    meta={"ai_dial_config": {"external_service": "sample-external-service"}},
+                )
+
+        logged_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert secret_api_key not in logged_text
+        assert secret_extra_header_value not in logged_text
+        assert f"tok-for-{secret_api_key}" not in logged_text

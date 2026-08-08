@@ -10,16 +10,24 @@ COPY pyproject.toml poetry.lock poetry.toml README.md MANIFEST.in ./
 RUN poetry install --no-interaction --no-ansi --no-cache --no-root --only main
 
 COPY src/ ./src/
-RUN poetry install --no-interaction --no-ansi --no-cache --only main
+# pip is only needed to build this venv; it is never invoked at runtime, and its
+# internally-vendored copies of msgpack/setuptools (pip/_vendor/vendor.txt) trail
+# behind CVE fixes independent of the pip version, so drop it from the shipped venv.
+RUN poetry install --no-interaction --no-ansi --no-cache --only main && \
+    .venv/bin/python -m pip uninstall --yes pip
 
 FROM python:3.13-alpine AS runtime
 
+# Same reasoning as the builder venv: the base image's system pip (and its vendored
+# msgpack/setuptools) is unused at runtime and only present via ensurepip.
 RUN apk update && apk upgrade --no-cache libcrypto3 libssl3 libexpat zlib musl musl-utils && \
-    apk add --no-cache ca-certificates wget
+    apk add --no-cache ca-certificates wget && \
+    python -m pip uninstall --yes pip
 
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    MCP_PORT=8080 \
     LOG_LEVEL=INFO \
     PATH="/app/.venv/bin:$PATH"
 

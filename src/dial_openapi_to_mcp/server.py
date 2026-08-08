@@ -15,9 +15,9 @@ from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 import httpx
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_request
+from fastmcp.server.lifespan import lifespan
 from fastmcp.server.middleware import Middleware, MiddlewareContext
-from fastmcp.tools import Tool
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools import Tool, ToolResult
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -25,6 +25,9 @@ from .cache import CacheEntry, MCPCache
 
 _REQUEST_CREDENTIAL: ContextVar[tuple[str, str] | None] = ContextVar(
     "request_credential", default=None
+)
+_REQUEST_HEADERS: ContextVar[tuple[tuple[str, str], ...]] = ContextVar(
+    "request_headers", default=()
 )
 _SENSITIVE_HEADER_NAMES = {
     "authorization",
@@ -72,16 +75,11 @@ APPLICATION_SCHEMA: Dict[str, Any] = json.loads(
 )
 
 
-def get_api_id(
-    spec: Dict[str, Any], base_url: Optional[str], extra_headers: Optional[list] = None
-) -> str:
-    """Generate an opaque cache key without retaining credential values."""
+def get_api_id(spec: Dict[str, Any], base_url: Optional[str]) -> str:
+    """Generate an opaque key from inputs that affect the generated MCP definition."""
     base = json.dumps(spec, sort_keys=True)
     suffix = base_url or ""
-    header_names = sorted(
-        entry.get("name", "").lower() for entry in extra_headers or [] if isinstance(entry, dict)
-    )
-    fingerprint = hashlib.sha256(f"{base}|{suffix}|{header_names}".encode()).hexdigest()
+    fingerprint = hashlib.sha256(f"{base}|{suffix}".encode()).hexdigest()
     return fingerprint[:16]
 
 
@@ -90,16 +88,28 @@ def _safe_destination(url: httpx.URL) -> str:
     return f"{url.scheme}://{url.host}{url.path}"
 
 
+def _resolve_blocked_forwarded_headers() -> set[str]:
+    """Operator-overridable block set; unset OUTBOUND_HEADER_BLOCKLIST keeps the default."""
+    raw = os.environ.get("OUTBOUND_HEADER_BLOCKLIST")
+    if raw is None:
+        return _BLOCKED_FORWARDED_HEADERS
+    return {name.strip().lower() for name in raw.split(",") if name.strip()}
+
+
 def _validate_extra_headers(raw_headers: Any) -> list[dict[str, str]]:
-    """Accept only explicitly allowlisted non-sensitive forwarded headers."""
+    """Reject blocked forwarded headers; if OUTBOUND_HEADER_ALLOWLIST is explicitly set,
+    also require forwarded headers to be named in it."""
     if not isinstance(raw_headers, list):
         raise ValueError("extra_headers must be a JSON array")
 
-    allowlist = {
-        name.strip().lower()
-        for name in os.getenv("OUTBOUND_HEADER_ALLOWLIST", "").split(",")
-        if name.strip()
-    }
+    blocked = _resolve_blocked_forwarded_headers()
+    allowlist_raw = os.environ.get("OUTBOUND_HEADER_ALLOWLIST")
+    allowlist = (
+        {name.strip().lower() for name in allowlist_raw.split(",") if name.strip()}
+        if allowlist_raw is not None
+        else None
+    )
+
     validated = []
     for entry in raw_headers:
         if not isinstance(entry, dict):
@@ -109,7 +119,9 @@ def _validate_extra_headers(raw_headers: Any) -> list[dict[str, str]]:
         if not isinstance(name, str) or not isinstance(value, str):
             raise ValueError("extra_headers entries require string name and value")
         normalized_name = name.lower()
-        if normalized_name in _BLOCKED_FORWARDED_HEADERS or normalized_name not in allowlist:
+        if normalized_name in blocked or (
+            allowlist is not None and normalized_name not in allowlist
+        ):
             raise ValueError(f"Forwarding header {name!r} is not permitted")
         validated.append({"name": name, "value": value})
     return validated
@@ -138,9 +150,19 @@ def _normalize_spec_to_json(spec: Any) -> str:
 class DialCredentialsError(Exception):
     """Raised when ai_dial_config.external_service is set but credentials can't be resolved."""
 
-    def __init__(self, message: str, external_service: str):
+    def __init__(
+        self,
+        message: str,
+        external_service: str,
+        status_code: int = 500,
+        www_authenticate: Optional[str] = None,
+        scope: Optional[str] = None,
+    ):
         super().__init__(message)
         self.external_service = external_service
+        self.status_code = status_code
+        self.www_authenticate = www_authenticate
+        self.scope = scope
 
 
 async def _fetch_dial_credentials(
@@ -148,11 +170,15 @@ async def _fetch_dial_credentials(
     application: str,
     external_service: str,
     per_request_key: str,
-) -> Optional[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     1. GET /v1/{application} — verify external_service is configured (application = "applications/{bucket}/{id}").
     2. POST /v1/ops/external-service/credentials — retrieve the live credential header.
-    Returns {"header_name": str, "header_value": str, "expires_at": int|None} or None.
+    Returns {"header_name": str, "header_value": str, "expires_at": int|None}.
+
+    Raises DialCredentialsError with status_code=404 when external_service isn't configured
+    on the application, and status_code=401 (with a www_authenticate challenge) when it's
+    configured but DIAL core has no stored credential for it yet (the user needs to log in).
     """
     base = dial_url.rstrip("/")
     auth = {"Api-Key": per_request_key}
@@ -161,20 +187,37 @@ async def _fetch_dial_credentials(
         app_resp.raise_for_status()
         external_services = app_resp.json().get("external_services") or {}
         if external_service not in external_services:
-            logger.warning(
-                "DIAL external service %r not found in application %r",
-                external_service,
-                application,
+            msg = (
+                f"External service {external_service!r} not found in application "
+                f"{application!r} external_services registry"
             )
-            return None
+            logger.warning(msg)
+            raise DialCredentialsError(msg, external_service, status_code=404)
 
         scope = f"{application}/external_services/{external_service}"
-        cred_resp = await client.post(
-            f"{base}/v1/ops/external-service/credentials",
-            headers=auth,
-            json={"url": scope},
-        )
-        cred_resp.raise_for_status()
+        try:
+            cred_resp = await client.post(
+                f"{base}/v1/ops/external-service/credentials",
+                headers=auth,
+                json={"url": scope},
+            )
+            cred_resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                www_authenticate = (
+                    f'DIAL-External-Service url="{scope}", method="external-service/signin"'
+                )
+                msg = f"Sign-in required for external service {external_service!r}."
+                logger.warning(msg)
+                raise DialCredentialsError(
+                    msg,
+                    external_service,
+                    status_code=401,
+                    www_authenticate=www_authenticate,
+                    scope=scope,
+                ) from e
+            raise
+
         data = cred_resp.json()
         return {
             "header_name": data["header_name"],
@@ -224,6 +267,8 @@ async def _resolve_dial_credentials(request: Request) -> Optional[Dict[str, Any]
         creds = await _fetch_dial_credentials(
             dial_url, application, external_service, per_request_key
         )
+    except DialCredentialsError:
+        raise
     except httpx.HTTPStatusError as e:
         msg = f"Failed to fetch DIAL credentials for {external_service!r}: DIAL core returned {e.response.status_code} {e.response.reason_phrase}"
         logger.error(msg)
@@ -232,11 +277,6 @@ async def _resolve_dial_credentials(request: Request) -> Optional[Dict[str, Any]
         msg = f"Failed to fetch DIAL credentials for {external_service!r}: {e}"
         logger.error(msg)
         raise DialCredentialsError(msg, external_service) from e
-
-    if creds is None:
-        msg = f"External service {external_service!r} not found in application {application!r} external_services registry"
-        logger.error(msg)
-        raise DialCredentialsError(msg, external_service)
 
     return creds
 
@@ -552,10 +592,39 @@ async def _build_extended_openapi_spec(
     return spec_copy
 
 
+async def _extract_extra_headers(request: Request) -> list[dict[str, str]]:
+    """Extract and validate request-scoped headers without retaining their values."""
+    meta: dict[str, Any] = {}
+    try:
+        request_body = await request.json()
+        if isinstance(request_body, dict):
+            params = request_body.get("params", {})
+            if isinstance(params, dict):
+                candidate = params.get("_meta") or params.get("meta") or {}
+                if isinstance(candidate, dict):
+                    meta = candidate
+    except (json.JSONDecodeError, ValueError, TypeError):
+        logger.debug("Request metadata was not available")
+
+    raw_extra_headers: Any = request.headers.get("x-extra-headers")
+    if raw_extra_headers is None:
+        ai_dial = meta.get("ai_dial_config") or {}
+        if isinstance(ai_dial, dict):
+            raw_extra_headers = ai_dial.get("extra_headers") or meta.get("extra_headers")
+
+    if isinstance(raw_extra_headers, str):
+        try:
+            raw_extra_headers = json.loads(raw_extra_headers)
+        except json.JSONDecodeError as error:
+            raise ValueError("extra_headers must contain valid JSON") from error
+    return _validate_extra_headers(raw_extra_headers) if raw_extra_headers else []
+
+
 async def get_or_create_mcp(
     spec_json: str,
     request: Request,
     base_url: Optional[str] = None,
+    extra_headers: Optional[list[dict[str, str]]] = None,
 ) -> Optional[CacheEntry]:
     """Get or create MCP instance for an OpenAPI spec (supports JSON and YAML)"""
     try:
@@ -576,6 +645,10 @@ async def get_or_create_mcp(
             logger.error(f"Failed to parse OpenAPI spec: {yaml_error}")
             return None
 
+    if not isinstance(openapi_spec, dict):
+        logger.error("OpenAPI spec must be a JSON or YAML object")
+        return None
+
     swagger_version = openapi_spec.get("swagger")
     openapi_version = openapi_spec.get("openapi", "")
     if swagger_version:
@@ -590,38 +663,14 @@ async def get_or_create_mcp(
         return None
 
     try:
-        meta: dict[str, Any] = {}
-        raw_extra_headers: Any = None
-        try:
-            request_body = await request.json()
-            if isinstance(request_body, dict):
-                params = request_body.get("params", {})
-                if isinstance(params, dict):
-                    meta = params.get("_meta") or params.get("meta") or {}
-        except (json.JSONDecodeError, ValueError, TypeError):
-            logger.debug("Request metadata was not available")
-
-        raw_extra_headers = request.headers.get("x-extra-headers")
-        if raw_extra_headers is None and isinstance(meta, dict):
-            ai_dial = meta.get("ai_dial_config") or {}
-            if isinstance(ai_dial, dict):
-                raw_extra_headers = ai_dial.get("extra_headers") or meta.get("extra_headers")
-
-        if isinstance(raw_extra_headers, str):
-            try:
-                raw_extra_headers = json.loads(raw_extra_headers)
-            except json.JSONDecodeError as error:
-                raise ValueError("extra_headers must contain valid JSON") from error
-        extra_headers_list = _validate_extra_headers(raw_extra_headers) if raw_extra_headers else []
+        if extra_headers is None:
+            extra_headers = await _extract_extra_headers(request)
 
         if not base_url:
             base_url = _base_url_from_spec(openapi_spec)
         base_url = _normalize_base_url(base_url)
 
-        api_id = get_api_id(openapi_spec, base_url, extra_headers_list or None)
-        cache_entry = await _mcp_cache.get(api_id)
-        if cache_entry:
-            return cache_entry
+        api_id = get_api_id(openapi_spec, base_url)
 
         if base_url:
             if "servers" not in openapi_spec:
@@ -633,11 +682,12 @@ async def get_or_create_mcp(
                     openapi_spec["servers"][0] = {"url": base_url}
             else:
                 openapi_spec["servers"].append({"url": base_url})
-        headers = {entry["name"]: entry["value"] for entry in extra_headers_list}
 
         async def prepare_request(outbound_request: httpx.Request) -> None:
             for header_name in ("x-meta", "x-base-url", "x-extra-headers"):
                 outbound_request.headers.pop(header_name, None)
+            for header_name, header_value in _REQUEST_HEADERS.get():
+                outbound_request.headers[header_name] = header_value
             credential = _REQUEST_CREDENTIAL.get()
             if credential:
                 outbound_request.headers[credential[0]] = credential[1]
@@ -648,23 +698,7 @@ async def get_or_create_mcp(
                 len(outbound_request.headers),
             )
 
-        if base_url:
-            client = httpx.AsyncClient(
-                base_url=base_url,
-                headers=headers,
-                timeout=30.0,
-                follow_redirects=False,
-                event_hooks={"request": [prepare_request]},
-            )
-        else:
-            logger.info("No base URL provided; relying on OpenAPI servers or absolute URLs")
-            client = httpx.AsyncClient(
-                headers=headers,
-                timeout=30.0,
-                follow_redirects=False,
-                event_hooks={"request": [prepare_request]},
-            )
-        api_name = openapi_spec.get('info', {}).get('title', 'Unknown API')
+        api_name = openapi_spec.get("info", {}).get("title", "Unknown API")
         mcp_names, mcp_component_fn = _collect_x_mcp_overrides(openapi_spec)
         from_openapi_kwargs: Dict[str, Any] = {}
         if mcp_names:
@@ -673,44 +707,52 @@ async def get_or_create_mcp(
             from_openapi_kwargs["mcp_component_fn"] = mcp_component_fn
 
         paths = openapi_spec.get("paths", {})
-        logger.debug(
-            "Creating MCP: name=%r api_id=%s base_url=%s path_count=%d has_name_overrides=%s",
-            api_name,
-            api_id,
-            base_url,
-            len(paths) if isinstance(paths, dict) else 0,
-            mcp_names is not None,
+
+        async def build_entry() -> CacheEntry:
+            client_kwargs: dict[str, Any] = {
+                "timeout": 30.0,
+                "follow_redirects": False,
+                "event_hooks": {"request": [prepare_request]},
+            }
+            if base_url:
+                client_kwargs["base_url"] = base_url
+            else:
+                logger.info("No base URL provided; relying on OpenAPI servers or absolute URLs")
+            client = httpx.AsyncClient(**client_kwargs)
+            try:
+                logger.debug(
+                    "Creating MCP: name=%r api_id=%s base_url=%s path_count=%d has_name_overrides=%s",
+                    api_name,
+                    api_id,
+                    base_url,
+                    len(paths) if isinstance(paths, dict) else 0,
+                    mcp_names is not None,
+                )
+                mcp_instance = FastMCP.from_openapi(
+                    openapi_spec=openapi_spec,
+                    client=client,
+                    name=api_name,
+                    **from_openapi_kwargs,
+                )
+                tools_list = await mcp_instance.list_tools()
+                tools_dict = {tool.name: tool for tool in tools_list}
+                logger.debug("FastMCP.from_openapi output: tools=%s", list(tools_dict))
+                return CacheEntry(
+                    mcp=mcp_instance,
+                    name=api_name,
+                    client=client,
+                    api_id=api_id,
+                    spec=openapi_spec,
+                    tools=tools_dict,
+                )
+            except BaseException:
+                await client.aclose()
+                raise
+
+        entry = await _mcp_cache.get_or_create(api_id, build_entry)
+        logger.info(
+            "Created or reused MCP for: %s (ID: %s, %d tools)", api_name, api_id, len(entry.tools)
         )
-
-        try:
-            mcp_instance = FastMCP.from_openapi(
-                openapi_spec=openapi_spec,
-                client=client,
-                name=api_name,
-                **from_openapi_kwargs,
-            )
-        except Exception as e:
-            logger.error(
-                f"FastMCP failed to parse OpenAPI spec ({type(e).__name__}): {e}", exc_info=True
-            )
-            return None
-
-        tools_list = await mcp_instance.list_tools()
-        tools_dict = {t.name: t for t in tools_list}
-
-        logger.debug(f"FastMCP.from_openapi output: tools={list(tools_dict.keys())}")
-
-        entry = CacheEntry(
-            mcp=mcp_instance,
-            name=api_name,
-            client=client,
-            api_id=api_id,
-            spec=openapi_spec,
-            tools=tools_dict,
-        )
-
-        await _mcp_cache.set(api_id, entry)
-        logger.info(f"Created MCP for: {api_name} (ID: {api_id}, {len(tools_dict)} tools)")
         return entry
 
     except Exception as e:
@@ -743,7 +785,13 @@ class OpenAPI2MCPBridge(Middleware):
             logger.error(f"Error in list_resources: {e}", exc_info=True)
             raise
 
-    async def on_read_resource(self, context: MiddlewareContext, call_next):
+    # The dict-returning fallback branch below (used when FastMCP has no
+    # `_resource_manager`) doesn't match the declared `ResourceResult` return
+    # type. Tracked as follow-up FastMCP-compatibility work rather than fixed
+    # here to avoid guessing at the real ResourceResult contract.
+    async def on_read_resource(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self, context: MiddlewareContext, call_next
+    ):
         """Intercept read_resource"""
         logger.debug("Intercepting read_resource")
         try:
@@ -798,7 +846,11 @@ class OpenAPI2MCPBridge(Middleware):
             logger.error(f"Error in list_prompts: {e}", exc_info=True)
             raise
 
-    async def on_get_prompt(self, context: MiddlewareContext, call_next):
+    # Same pre-existing dict-fallback vs. `PromptResult` mismatch as
+    # `on_read_resource` above.
+    async def on_get_prompt(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self, context: MiddlewareContext, call_next
+    ):
         """Intercept get_prompt"""
         logger.debug("Intercepting get_prompt")
         try:
@@ -847,10 +899,12 @@ class OpenAPI2MCPBridge(Middleware):
         try:
             request = get_http_request()
             request_body = await request.json()
-            params = request_body.get("params", {})
-            ref = params.get("ref", {})
-            argument = params.get("argument", {})
-            logger.info(f"Complete: ref={ref}, argument={argument}")
+            params = request_body.get("params", {}) if isinstance(request_body, dict) else {}
+            ref = params.get("ref", {}) if isinstance(params, dict) else {}
+            argument = params.get("argument", {}) if isinstance(params, dict) else {}
+            if not isinstance(ref, dict) or not isinstance(argument, dict):
+                raise ValueError("Completion ref and argument must be objects")
+            logger.info("Completion request received")
 
             spec_json, base_url = await _extract_spec_from_request(request)
             if not spec_json:
@@ -913,9 +967,15 @@ class OpenAPI2MCPBridge(Middleware):
         try:
             request = get_http_request()
             request_body = await request.json()
+            if not isinstance(request_body, dict):
+                raise ValueError("Tool call request body must be an object")
             params = request_body.get("params", {})
+            if not isinstance(params, dict):
+                raise ValueError("Tool call params must be an object")
             tool_name = params.get("name")
             arguments = params.get("arguments", {})
+            if not isinstance(tool_name, str) or not isinstance(arguments, dict):
+                raise ValueError("Tool call requires a string name and object arguments")
 
             logger.info("Tool call: %s", tool_name)
             logger.debug(
@@ -929,7 +989,10 @@ class OpenAPI2MCPBridge(Middleware):
             if not spec_json:
                 return await call_next(context)
 
-            cache_entry = await get_or_create_mcp(spec_json, request, base_url)
+            extra_headers = await _extract_extra_headers(request)
+            cache_entry = await get_or_create_mcp(
+                spec_json, request, base_url, extra_headers=extra_headers
+            )
             if not cache_entry:
                 raise ValueError(
                     "Failed to create MCP from OpenAPI spec — check server logs for details"
@@ -939,6 +1002,7 @@ class OpenAPI2MCPBridge(Middleware):
                 available = list(cache_entry.tools.keys())
                 return ToolResult(
                     content=f"Tool '{tool_name}' not found. Available: {', '.join(available[:5])}",
+                    is_error=True,
                     structured_content={
                         "success": False,
                         "error": "Tool not found",
@@ -948,28 +1012,59 @@ class OpenAPI2MCPBridge(Middleware):
 
             logger.info(f"Executing '{tool_name}' from {cache_entry.name}")
 
-            # DialCredentialsError propagates out (see outer except below): the tool must
-            # not be called without auth, and raising — rather than returning a ToolResult
-            # with a mismatched shape — avoids tripping the MCP server's structured-output
-            # validation against the real tool's outputSchema.
-            dial_creds = await _resolve_dial_credentials(request)
+            # ToolResult(meta=..., is_error=True) skips structured_content entirely, so
+            # to_mcp_result() returns a CallToolResult directly and the MCP SDK never
+            # runs jsonschema validation against the real tool's outputSchema.
+            try:
+                dial_creds = await _resolve_dial_credentials(request)
+            except DialCredentialsError as e:
+                meta: dict[str, Any] = {
+                    "dial.epam.com/error": {
+                        "status_code": e.status_code,
+                        "external_service": e.external_service,
+                    }
+                }
+                if e.status_code == 401 and e.scope:
+                    meta["dial.epam.com/auth-challenge"] = [
+                        {"method": "external-service/signin", "scope": e.scope}
+                    ]
+                return ToolResult(content=str(e), is_error=True, meta=meta)
+
             credential_token = None
             if dial_creds:
                 header_name = dial_creds.get("header_name")
                 header_value = dial_creds.get("header_value")
                 if not isinstance(header_name, str) or not isinstance(header_value, str):
-                    raise DialCredentialsError(
-                        "DIAL core returned an invalid credential", "unknown"
+                    return ToolResult(
+                        content="DIAL core returned an invalid credential",
+                        is_error=True,
+                        meta={
+                            "dial.epam.com/error": {
+                                "status_code": 500,
+                                "external_service": "unknown",
+                            }
+                        },
                     )
-                if header_name.lower() in _BLOCKED_FORWARDED_HEADERS:
-                    raise DialCredentialsError(
-                        "DIAL core returned a prohibited credential header", "unknown"
+                if header_name.lower() in _resolve_blocked_forwarded_headers():
+                    return ToolResult(
+                        content="DIAL core returned a prohibited credential header",
+                        is_error=True,
+                        meta={
+                            "dial.epam.com/error": {
+                                "status_code": 500,
+                                "external_service": "unknown",
+                            }
+                        },
                     )
                 credential_token = _REQUEST_CREDENTIAL.set((header_name, header_value))
 
+            headers_token = _REQUEST_HEADERS.set(
+                tuple((entry["name"], entry["value"]) for entry in extra_headers)
+            )
             try:
                 result = await cache_entry.mcp.call_tool(tool_name, arguments)
             finally:
+                _REQUEST_HEADERS.reset(headers_token)
                 if credential_token is not None:
                     _REQUEST_CREDENTIAL.reset(credential_token)
 
@@ -986,7 +1081,18 @@ class OpenAPI2MCPBridge(Middleware):
             raise
 
 
-mcp = FastMCP(name="OpenAPI to MCP")
+@lifespan
+async def _cache_lifespan(server):
+    """Run cache maintenance and release cached HTTP clients with the server."""
+    _mcp_cache.start_cleanup_task()
+    try:
+        yield {}
+    finally:
+        await _mcp_cache.stop_cleanup_task()
+        await _mcp_cache.clear()
+
+
+mcp = FastMCP(name="OpenAPI to MCP", lifespan=_cache_lifespan)
 mcp.add_middleware(OpenAPI2MCPBridge())
 
 
@@ -1029,9 +1135,10 @@ def _format_exception(e: BaseException, _depth: int = 0) -> Dict[str, Any]:
     if _depth > 5:
         return {"type": "...", "message": "truncated"}
     result: Dict[str, Any] = {"type": type(e).__name__, "message": str(e)}
-    if hasattr(e, "errors") and callable(e.errors):
+    errors_method = getattr(e, "errors", None)
+    if callable(errors_method):
         try:
-            result["pydantic_errors"] = e.errors()
+            result["pydantic_errors"] = errors_method()
         except Exception:
             pass
     if e.__cause__ is not None:
@@ -1073,6 +1180,12 @@ async def openapi_verify(spec: Dict[str, Any] | str) -> Dict[str, Any]:
                         }
                     },
                 }
+
+    if not isinstance(spec_dict, dict):
+        return {
+            "success": False,
+            "steps": {"parse": {"ok": False, "error": "Spec must be an object"}},
+        }
 
     # unwrap openapi_convert / openapi_extend response envelope if passed directly
     if (
@@ -1126,13 +1239,11 @@ async def openapi_verify(spec: Dict[str, Any] | str) -> Dict[str, Any]:
     steps["structure"] = {"ok": True, "path_count": len(paths or {})}
 
     # Step 4: FastMCP compatibility
+    client: httpx.AsyncClient | None = None
     try:
-        import httpx
-
         client = httpx.AsyncClient()
         mcp_instance = FastMCP.from_openapi(openapi_spec=spec_dict, client=client, name="_verify")
         tools = await mcp_instance.list_tools()
-        await client.aclose()
         steps["fastmcp"] = {"ok": True, "tools": len(tools)}
     except Exception as e:
         steps["fastmcp"] = {
@@ -1161,6 +1272,9 @@ async def openapi_verify(spec: Dict[str, Any] | str) -> Dict[str, Any]:
                         pass
             steps["fastmcp"]["path_diagnosis"] = path_results
         return {"success": False, "steps": steps}
+    finally:
+        if client is not None:
+            await client.aclose()
 
     return {"success": True, "steps": steps}
 
@@ -1332,17 +1446,6 @@ async def openapi_convert(spec: Dict[str, Any] | str) -> Dict[str, Any]:
         "success": False,
         "error": "Unrecognized spec: no 'swagger' or 'openapi' version field found",
     }
-
-
-async def startup() -> None:
-    """Start cache maintenance inside the application event loop."""
-    _mcp_cache.start_cleanup_task()
-
-
-async def shutdown() -> None:
-    """Stop maintenance and close all cached clients on the same event loop."""
-    await _mcp_cache.stop_cleanup_task()
-    await _mcp_cache.clear()
 
 
 if __name__ == "__main__":

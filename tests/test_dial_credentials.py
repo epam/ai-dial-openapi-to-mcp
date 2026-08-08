@@ -1,12 +1,13 @@
 """Tests for _resolve_dial_credentials misconfiguration handling."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from dial_openapi_to_mcp.server import (
     DialCredentialsError,
+    _fetch_dial_credentials,
     _resolve_dial_credentials,
 )
 
@@ -150,20 +151,116 @@ async def test_dial_timeout_raises(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_service_not_in_registry_raises(monkeypatch):
+async def test_service_not_in_registry_status_code_propagates(monkeypatch):
+    """_fetch_dial_credentials raises 404 directly; _resolve_dial_credentials must not
+    swallow the status_code/www_authenticate by re-wrapping it into a generic error."""
     monkeypatch.setenv("DIAL_URL", "https://dial.example.com")
 
-    async def _not_found(*args, **kwargs):
-        return None
+    async def _not_in_registry(*args, **kwargs):
+        raise DialCredentialsError(
+            "External service 'sample-external-service' not found (status_code=404)",
+            "sample-external-service",
+            status_code=404,
+        )
 
-    monkeypatch.setattr("dial_openapi_to_mcp.server._fetch_dial_credentials", _not_found)
+    monkeypatch.setattr("dial_openapi_to_mcp.server._fetch_dial_credentials", _not_in_registry)
 
     request = _make_request(
         _dial_body(),
         headers={"x-dial-application-id": "applications/bucket/app", "api-key": "secret"},
     )
-    with pytest.raises(DialCredentialsError):
+    with pytest.raises(DialCredentialsError) as exc_info:
         await _resolve_dial_credentials(request)
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.www_authenticate is None
+
+
+@pytest.mark.asyncio
+async def test_credentials_not_yet_stored_raises_401_with_challenge(monkeypatch):
+    """DIAL core has no stored credential for a configured external service: the user
+    needs to log in, and the challenge is exposed via www_authenticate."""
+    monkeypatch.setenv("DIAL_URL", "https://dial.example.com")
+
+    expected_www_authenticate = (
+        'DIAL-External-Service url="applications/bucket/app/external_services/'
+        'sample-external-service", method="external-service/signin"'
+    )
+
+    async def _needs_login(*args, **kwargs):
+        raise DialCredentialsError(
+            "No stored credential for external service 'sample-external-service'; "
+            "user login required (status_code=401)",
+            "sample-external-service",
+            status_code=401,
+            www_authenticate=expected_www_authenticate,
+        )
+
+    monkeypatch.setattr("dial_openapi_to_mcp.server._fetch_dial_credentials", _needs_login)
+
+    request = _make_request(
+        _dial_body(),
+        headers={"x-dial-application-id": "applications/bucket/app", "api-key": "secret"},
+    )
+    with pytest.raises(DialCredentialsError) as exc_info:
+        await _resolve_dial_credentials(request)
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.www_authenticate == expected_www_authenticate
+
+
+@pytest.mark.asyncio
+async def test_fetch_dial_credentials_404_for_service_not_in_registry():
+    """Real _fetch_dial_credentials: application has no such external service configured."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/applications/bucket/app"
+        return httpx.Response(200, json={"external_services": {}})
+
+    transport = httpx.MockTransport(_handler)
+    real_async_client = httpx.AsyncClient
+    with patch(
+        "dial_openapi_to_mcp.server.httpx.AsyncClient",
+        lambda **kwargs: real_async_client(**{**kwargs, "transport": transport}),
+    ):
+        with pytest.raises(DialCredentialsError) as exc_info:
+            await _fetch_dial_credentials(
+                "https://dial.example.com",
+                "applications/bucket/app",
+                "sample-external-service",
+                "secret",
+            )
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.www_authenticate is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_dial_credentials_401_when_no_stored_credential():
+    """Real _fetch_dial_credentials: service is configured but DIAL core returns 404
+    from the credentials endpoint because the user hasn't logged in yet."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/applications/bucket/app":
+            return httpx.Response(200, json={"external_services": {"sample-external-service": {}}})
+        assert request.url.path == "/v1/ops/external-service/credentials"
+        return httpx.Response(404, json={"error": "not found"})
+
+    transport = httpx.MockTransport(_handler)
+    real_async_client = httpx.AsyncClient
+    with patch(
+        "dial_openapi_to_mcp.server.httpx.AsyncClient",
+        lambda **kwargs: real_async_client(**{**kwargs, "transport": transport}),
+    ):
+        with pytest.raises(DialCredentialsError) as exc_info:
+            await _fetch_dial_credentials(
+                "https://dial.example.com",
+                "applications/bucket/app",
+                "sample-external-service",
+                "secret",
+            )
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.www_authenticate == (
+        'DIAL-External-Service url="applications/bucket/app/external_services/'
+        'sample-external-service", method="external-service/signin"'
+    )
 
 
 @pytest.mark.asyncio

@@ -41,7 +41,8 @@ async def test_get_or_create_mcp_cache_hit():
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_mcp_rejects_unapproved_extra_headers(monkeypatch):
+async def test_get_or_create_mcp_rejects_header_not_in_explicit_allowlist(monkeypatch):
+    monkeypatch.setenv("OUTBOUND_HEADER_ALLOWLIST", "x-other-header")
     spec_json = json.dumps(MINIMAL_OPENAPI_30)
     request = _make_request(
         {"params": {"_meta": {"extra_headers": [{"name": "X-Key", "value": "secret"}]}}}
@@ -60,6 +61,44 @@ async def test_get_or_create_mcp_allows_configured_header(monkeypatch):
 
     entry = await get_or_create_mcp(spec_json, request)
     assert entry is not None
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_mcp_allows_extra_header_when_allowlist_unset(monkeypatch):
+    monkeypatch.delenv("OUTBOUND_HEADER_ALLOWLIST", raising=False)
+    spec_json = json.dumps(MINIMAL_OPENAPI_30)
+    request = _make_request(
+        {"params": {"_meta": {"extra_headers": [{"name": "X-Key", "value": "secret"}]}}}
+    )
+
+    entry = await get_or_create_mcp(spec_json, request)
+    assert entry is not None
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_mcp_blocklist_override_replaces_default(monkeypatch):
+    monkeypatch.delenv("OUTBOUND_HEADER_ALLOWLIST", raising=False)
+    monkeypatch.setenv("OUTBOUND_HEADER_BLOCKLIST", "x-custom-blocked")
+    spec_json = json.dumps(MINIMAL_OPENAPI_30)
+
+    # "Connection" is in the default block set but not in the overridden one.
+    allowed_request = _make_request(
+        {"params": {"_meta": {"extra_headers": [{"name": "Connection", "value": "keep-alive"}]}}}
+    )
+    entry = await get_or_create_mcp(spec_json, allowed_request)
+    assert entry is not None
+
+    blocked_request = _make_request(
+        {"params": {"_meta": {"extra_headers": [{"name": "X-Custom-Blocked", "value": "v"}]}}}
+    )
+    assert await get_or_create_mcp(spec_json, blocked_request) is None
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_mcp_rejects_non_object_spec():
+    request = _make_request({"params": {}})
+
+    assert await get_or_create_mcp(json.dumps(["not", "an", "object"]), request) is None
 
 
 @pytest.mark.asyncio

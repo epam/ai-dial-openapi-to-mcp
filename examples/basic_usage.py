@@ -41,7 +41,7 @@ async def main() -> None:
             print(f"  - {tool.name}: {tool.description or 'No description'}")
 
         result = await client.call_tool("listTodos", {})
-        todos = result.data if hasattr(result, "data") else result
+        todos = result.data
         print(f"Retrieved {len(todos)} todos")
         print(f"First todo: {todos[0]['title']}")
 
