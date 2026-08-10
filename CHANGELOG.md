@@ -21,7 +21,7 @@ The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 - Forwarded header values and DIAL credentials remain request-scoped; cached entries contain no header values or credentials.
 - Redirect following is disabled, sensitive values are excluded from logs, and DIAL credential failures do not fall back to unauthenticated requests.
-- Documented the client-selected destination trust boundary. No application destination allowlist or external egress control is required; operators may add network restrictions according to their environment.
+- Documented the client-selected destination trust boundary; operators may add network restrictions according to their environment.
 
 [Unreleased]: https://github.com/epam/ai-dial-openapi-to-mcp/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/epam/ai-dial-openapi-to-mcp/releases/tag/v0.1.0

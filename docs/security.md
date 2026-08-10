@@ -1,6 +1,6 @@
 # Security Model
 
-OpenAPI to MCP is an outbound bridge for trusted MCP clients. It intentionally accepts client-selected API destinations and has no application destination allowlist. External egress controls are not required; deployments with stricter destination policies can add a firewall, egress proxy, or network policy.
+OpenAPI to MCP is an outbound bridge for trusted MCP clients. It intentionally accepts client-selected API destinations. Deployments with stricter destination policies can add network controls outside the application.
 
 ## Outbound requests
 

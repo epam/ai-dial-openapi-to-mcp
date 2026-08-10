@@ -25,4 +25,4 @@ Run DIAL credential tests after changes to logging, headers, or credentials:
 poetry run pytest tests/test_dial_credentials.py -q
 ```
 
-Before release, run full-history secret scanning, build/install the wheel in a clean environment, build the container, and exercise the image from behind the intended network egress control.
+Before release, run full-history secret scanning, build/install the wheel in a clean environment, build the container, and exercise the image under your deployment's network conditions.
