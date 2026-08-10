@@ -24,7 +24,7 @@ sequenceDiagram
 ## Trust boundaries
 
 - MCP metadata, OpenAPI documents, tool arguments, destinations, and forwarded headers are untrusted input and may contain sensitive data.
-- The bridge intentionally accepts client-selected destinations. It has no application destination allowlist and does not require external egress controls; operators can apply network policy when their environment requires it.
+- The bridge intentionally accepts client-selected destinations. Operators can apply network policy when their environment requires it.
 - Operators configure the forwarded-header block list and optional allowlist. An unset allowlist permits non-blocked headers, an explicitly empty allowlist permits none, and a populated allowlist permits only listed, non-blocked names.
 - Forwarded header values and DIAL credentials are resolved per request and injected only into that outbound request.
 - Cache entries own generated MCP definitions and HTTP clients, keyed only by the OpenAPI spec and base URL; entries contain no forwarded header names, values, or credentials.

@@ -5,7 +5,7 @@ OpenAPI to MCP reads configuration from environment variables. Copy [`.env.templ
 > [!WARNING]
 > Configuration, OpenAPI documents, request headers, destinations, and tool arguments can contain sensitive data. Keep real values out of source control, logs, issue reports, and examples.
 
-The bridge intentionally accepts client-selected API destinations. No destination allowlist or external egress control is required. Operators with stricter destination policies can apply network controls outside the application.
+The bridge intentionally accepts client-selected API destinations. Operators with stricter destination policies can apply network controls outside the application.
 
 ## Server
 
