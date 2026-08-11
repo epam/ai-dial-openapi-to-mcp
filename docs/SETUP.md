@@ -35,6 +35,6 @@ poetry run pyright
 poetry run pytest
 ```
 
-The bridge accepts client-selected destinations; it does not require a destination allowlist or external egress control. Deploy it behind authenticated ingress, and add network restrictions only when required by your environment.
+The bridge accepts client-selected destinations. Deploy it behind authenticated ingress, and add network restrictions only when required by your environment.
 
 See the [configuration reference](../CONFIGURATION.md), [main README](../README.md), and [security model](security.md) for operational details.
