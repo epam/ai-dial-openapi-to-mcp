@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "ai-dial-openapi-to-mcp"
-version = "0.2.0rc0"
+version = "0.2.0rc1"
 description = "A secure OpenAPI-to-MCP bridge for DIAL and MCP clients"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
