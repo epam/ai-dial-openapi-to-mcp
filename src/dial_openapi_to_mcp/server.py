@@ -22,6 +22,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .cache import CacheEntry, MCPCache
+from .telemetry import setup_telemetry
 
 _REQUEST_CREDENTIAL: ContextVar[tuple[str, str] | None] = ContextVar(
     "request_credential", default=None
@@ -1081,13 +1082,20 @@ class OpenAPI2MCPBridge(Middleware):
             raise
 
 
+_ready = False
+
+
 @lifespan
 async def _cache_lifespan(server):
     """Run cache maintenance and release cached HTTP clients with the server."""
+    global _ready
+    setup_telemetry()
     _mcp_cache.start_cleanup_task()
+    _ready = True
     try:
         yield {}
     finally:
+        _ready = False
         await _mcp_cache.stop_cleanup_task()
         await _mcp_cache.clear()
 
@@ -1100,6 +1108,20 @@ mcp.add_middleware(OpenAPI2MCPBridge())
 async def get_application_schema(request: Request) -> JSONResponse:
     """Serve the DIAL application-type configuration schema."""
     return JSONResponse(APPLICATION_SCHEMA)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> JSONResponse:
+    """Liveness probe: the process is up. No external dependencies to check."""
+    return JSONResponse({"status": "ok"})
+
+
+@mcp.custom_route("/ready", methods=["GET"])
+async def ready(request: Request) -> JSONResponse:
+    """Readiness probe: the cache-maintenance lifespan has completed startup."""
+    if _ready:
+        return JSONResponse({"status": "ready"})
+    return JSONResponse({"status": "not ready"}, status_code=503)
 
 
 async def openapi_extend(
