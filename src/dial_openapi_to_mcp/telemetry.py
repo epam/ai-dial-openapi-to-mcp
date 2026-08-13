@@ -7,7 +7,13 @@ does nothing, so local/dev runs without OTEL configuration are unaffected.
 
 import logging
 import os
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from opentelemetry.sdk._logs.export import LogRecordExporter
+    from opentelemetry.sdk.metrics.export import MetricExporter, MetricReader
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace.export import SpanExporter
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +34,7 @@ def _parse_resource_attributes(raw: Optional[str]) -> Dict[str, str]:
     return attributes
 
 
-def _build_resource():
+def _build_resource() -> "Resource":
     from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
     attributes: Dict[str, str] = {SERVICE_NAME: os.getenv("OTEL_SERVICE_NAME", "openapi-to-mcp")}
@@ -44,7 +50,7 @@ def _use_http_protocol() -> bool:
     return os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc") in ("http/json", "http/protobuf")
 
 
-def _setup_traces(resource) -> None:
+def _setup_traces(resource: "Resource") -> None:
     exporters = {v.strip() for v in os.getenv("OTEL_TRACES_EXPORTER", "").split(",") if v.strip()}
     if "otlp" not in exporters:
         return
@@ -53,18 +59,27 @@ def _setup_traces(resource) -> None:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
+    span_exporter: "SpanExporter"
     if _use_http_protocol():
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter as HttpOTLPSpanExporter,
+        )
+
+        span_exporter = HttpOTLPSpanExporter(endpoint=_otlp_endpoint())
     else:
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as GrpcOTLPSpanExporter,
+        )
+
+        span_exporter = GrpcOTLPSpanExporter(endpoint=_otlp_endpoint())
 
     provider = TracerProvider(resource=resource)
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=_otlp_endpoint())))
+    provider.add_span_processor(BatchSpanProcessor(span_exporter))
     trace.set_tracer_provider(provider)
     logger.info("OpenTelemetry traces exporter enabled (otlp)")
 
 
-def _setup_logs(resource) -> None:
+def _setup_logs(resource: "Resource") -> None:
     exporters = {v.strip() for v in os.getenv("OTEL_LOGS_EXPORTER", "").split(",") if v.strip()}
     if "otlp" not in exporters:
         return
@@ -73,15 +88,22 @@ def _setup_logs(resource) -> None:
     from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
+    log_exporter: "LogRecordExporter"
     if _use_http_protocol():
-        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+            OTLPLogExporter as HttpOTLPLogExporter,
+        )
+
+        log_exporter = HttpOTLPLogExporter(endpoint=_otlp_endpoint())
     else:
-        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+            OTLPLogExporter as GrpcOTLPLogExporter,
+        )
+
+        log_exporter = GrpcOTLPLogExporter(endpoint=_otlp_endpoint())
 
     provider = LoggerProvider(resource=resource)
-    provider.add_log_record_processor(
-        BatchLogRecordProcessor(OTLPLogExporter(endpoint=_otlp_endpoint()))
-    )
+    provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     set_logger_provider(provider)
 
     # Bridge the existing stdlib logging (configured via logging.basicConfig
@@ -90,7 +112,7 @@ def _setup_logs(resource) -> None:
     logger.info("OpenTelemetry logs exporter enabled (otlp)")
 
 
-def _setup_metrics(resource) -> None:
+def _setup_metrics(resource: "Resource") -> None:
     exporters = {v.strip() for v in os.getenv("OTEL_METRICS_EXPORTER", "").split(",") if v.strip()}
     if not exporters:
         return
@@ -98,17 +120,26 @@ def _setup_metrics(resource) -> None:
     from opentelemetry import metrics
     from opentelemetry.sdk.metrics import MeterProvider
 
-    readers = []
+    readers: "List[MetricReader]" = []
 
     if "otlp" in exporters:
         from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 
+        metric_exporter: "MetricExporter"
         if _use_http_protocol():
-            from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
-        else:
-            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+            from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+                OTLPMetricExporter as HttpOTLPMetricExporter,
+            )
 
-        readers.append(PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=_otlp_endpoint())))
+            metric_exporter = HttpOTLPMetricExporter(endpoint=_otlp_endpoint())
+        else:
+            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+                OTLPMetricExporter as GrpcOTLPMetricExporter,
+            )
+
+            metric_exporter = GrpcOTLPMetricExporter(endpoint=_otlp_endpoint())
+
+        readers.append(PeriodicExportingMetricReader(metric_exporter))
         logger.info("OpenTelemetry metrics exporter enabled (otlp)")
 
     if "prometheus" in exporters:
