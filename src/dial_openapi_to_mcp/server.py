@@ -957,6 +957,7 @@ class OpenAPI2MCPBridge(Middleware):
                     "Missing or empty OpenAPI spec in list_tools request, returning default tools"
                 )
                 return await call_next(context)
+            assert spec_json is not None
 
             cache_entry = await get_or_create_mcp(spec_json, request, base_url)
             if not cache_entry:
@@ -1000,6 +1001,7 @@ class OpenAPI2MCPBridge(Middleware):
             spec_json, base_url = await _extract_spec_from_request(request)
             if _is_empty_spec_json(spec_json):
                 return await call_next(context)
+            assert spec_json is not None
 
             extra_headers = await _extract_extra_headers(request)
             cache_entry = await get_or_create_mcp(
