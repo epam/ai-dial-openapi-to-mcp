@@ -341,6 +341,17 @@ async def _extract_spec_from_request(request: Request) -> Tuple[Optional[str], O
     return spec, base_url
 
 
+def _is_empty_spec_json(spec_json: Optional[str]) -> bool:
+    """True when no spec was provided, or it parses to an empty JSON object ({})."""
+    if not spec_json:
+        return True
+    try:
+        parsed = json.loads(spec_json)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(parsed, dict) and not parsed
+
+
 def _base_url_from_spec(openapi_spec: Dict[str, Any]) -> Optional[str]:
     servers = openapi_spec.get("servers")
     if isinstance(servers, list) and servers:
@@ -941,9 +952,9 @@ class OpenAPI2MCPBridge(Middleware):
         try:
             request = get_http_request()
             spec_json, base_url = await _extract_spec_from_request(request)
-            if not spec_json:
+            if _is_empty_spec_json(spec_json):
                 logger.warning(
-                    "Missing OpenAPI spec in list_tools request, returning default tools"
+                    "Missing or empty OpenAPI spec in list_tools request, returning default tools"
                 )
                 return await call_next(context)
 
@@ -987,7 +998,7 @@ class OpenAPI2MCPBridge(Middleware):
             )
 
             spec_json, base_url = await _extract_spec_from_request(request)
-            if not spec_json:
+            if _is_empty_spec_json(spec_json):
                 return await call_next(context)
 
             extra_headers = await _extract_extra_headers(request)
