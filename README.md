@@ -47,7 +47,7 @@ make install_dev
 openapi-to-mcp
 ```
 
-The CLI loads `.env` at startup. The streamable HTTP endpoint is available at `http://localhost:8080/mcp`.
+The CLI loads `.env` at startup. The streamable HTTP endpoint is available at `http://localhost:8080/mcp`, with `GET /health` and `GET /ready` available for liveness/readiness probes (see [CONFIGURATION.md](CONFIGURATION.md#health--readiness)).
 
 > [!WARNING]
 > OpenAPI documents, destinations, tool arguments, and request headers are untrusted and may contain sensitive data. Run the bridge behind authenticated ingress, grant access only to trusted clients, and never publish real credentials in examples, logs, issues, or test fixtures.

@@ -22,6 +22,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .cache import CacheEntry, MCPCache
+from .telemetry import setup_telemetry
 
 _REQUEST_CREDENTIAL: ContextVar[tuple[str, str] | None] = ContextVar(
     "request_credential", default=None
@@ -338,6 +339,17 @@ async def _extract_spec_from_request(request: Request) -> Tuple[Optional[str], O
         logger.debug("Could not extract OpenAPI metadata from request body")
 
     return spec, base_url
+
+
+def _is_empty_spec_json(spec_json: Optional[str]) -> bool:
+    """True when no spec was provided, or it parses to an empty JSON object ({})."""
+    if not spec_json:
+        return True
+    try:
+        parsed = json.loads(spec_json)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(parsed, dict) and not parsed
 
 
 def _base_url_from_spec(openapi_spec: Dict[str, Any]) -> Optional[str]:
@@ -940,11 +952,12 @@ class OpenAPI2MCPBridge(Middleware):
         try:
             request = get_http_request()
             spec_json, base_url = await _extract_spec_from_request(request)
-            if not spec_json:
+            if _is_empty_spec_json(spec_json):
                 logger.warning(
-                    "Missing OpenAPI spec in list_tools request, returning default tools"
+                    "Missing or empty OpenAPI spec in list_tools request, returning default tools"
                 )
                 return await call_next(context)
+            assert spec_json is not None
 
             cache_entry = await get_or_create_mcp(spec_json, request, base_url)
             if not cache_entry:
@@ -986,8 +999,9 @@ class OpenAPI2MCPBridge(Middleware):
             )
 
             spec_json, base_url = await _extract_spec_from_request(request)
-            if not spec_json:
+            if _is_empty_spec_json(spec_json):
                 return await call_next(context)
+            assert spec_json is not None
 
             extra_headers = await _extract_extra_headers(request)
             cache_entry = await get_or_create_mcp(
@@ -1081,13 +1095,20 @@ class OpenAPI2MCPBridge(Middleware):
             raise
 
 
+_ready = False
+
+
 @lifespan
 async def _cache_lifespan(server):
     """Run cache maintenance and release cached HTTP clients with the server."""
+    global _ready
+    setup_telemetry()
     _mcp_cache.start_cleanup_task()
+    _ready = True
     try:
         yield {}
     finally:
+        _ready = False
         await _mcp_cache.stop_cleanup_task()
         await _mcp_cache.clear()
 
@@ -1100,6 +1121,20 @@ mcp.add_middleware(OpenAPI2MCPBridge())
 async def get_application_schema(request: Request) -> JSONResponse:
     """Serve the DIAL application-type configuration schema."""
     return JSONResponse(APPLICATION_SCHEMA)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> JSONResponse:
+    """Liveness probe: the process is up. No external dependencies to check."""
+    return JSONResponse({"status": "ok"})
+
+
+@mcp.custom_route("/ready", methods=["GET"])
+async def ready(request: Request) -> JSONResponse:
+    """Readiness probe: the cache-maintenance lifespan has completed startup."""
+    if _ready:
+        return JSONResponse({"status": "ready"})
+    return JSONResponse({"status": "not ready"}, status_code=503)
 
 
 async def openapi_extend(

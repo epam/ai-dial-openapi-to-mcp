@@ -48,3 +48,26 @@ The result's `_meta` carries machine-readable detail distinguishing why credenti
 
 - `_meta["dial.epam.com/error"]` — always present on failure: `{"status_code": <int>, "external_service": <str>}`. `status_code` is `404` when `external_service` is not configured on the DIAL application, `401` when it is configured but DIAL Core has no stored credential yet, or `500` for other configuration and credential-service errors.
 - `_meta["dial.epam.com/auth-challenge"]` — present only for `401`: a list of `{"method": "external-service/signin", "scope": <str>}` objects. `scope` is `<application>/external_services/<external_service>` and can be sent as `params.url` in an `external-service/signin` JSON-RPC request. After sign-in completes, retry the original tool call.
+
+## Health & readiness
+
+| Path | Purpose | Response |
+|---|---|---|
+| `GET /health` | Liveness — the process is up. | `200 {"status": "ok"}` |
+| `GET /ready` | Readiness — the cache-maintenance lifespan has finished startup. | `200 {"status": "ready"}` once ready, `503 {"status": "not ready"}` before. |
+
+Both are unauthenticated HTTP endpoints on `MCP_PORT`, intended for Kubernetes liveness/readiness probes.
+
+## Observability
+
+| Variable | Default | Required | Description |
+|---|---:|---|---|
+| `OTEL_SERVICE_NAME` | `openapi-to-mcp` | No | Service name attached to traces, metrics, and logs. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Unset | No | OTLP collector endpoint. Required for any `otlp` exporter to actually export. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` | No | `grpc` or `http/json`/`http/protobuf`. |
+| `OTEL_TRACES_EXPORTER` | Unset | No | Set to `otlp` to enable trace export. Unset disables tracing entirely. |
+| `OTEL_METRICS_EXPORTER` | Unset | No | Comma-separated: `otlp` to push metrics to the collector, `prometheus` to serve them locally. Unset disables metrics entirely. |
+| `OTEL_LOGS_EXPORTER` | Unset | No | Set to `otlp` to additionally export existing application logs (see [Server](#server) `LOG_LEVEL`) via OTLP. Unset disables log export; console logging is unaffected either way. |
+| `OTEL_RESOURCE_ATTRIBUTES` | Unset | No | Comma-separated `key=value` pairs merged into the OTEL resource. |
+
+When `OTEL_METRICS_EXPORTER` includes `prometheus`, metrics are served on `:9464/metrics` (not `MCP_PORT`) for scraping. With no `OTEL_*_EXPORTER` variable set, telemetry setup is a complete no-op — no ports opened, no exporters started.
