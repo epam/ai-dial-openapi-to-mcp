@@ -1059,17 +1059,6 @@ class OpenAPI2MCPBridge(Middleware):
                             }
                         },
                     )
-                if header_name.lower() in _resolve_blocked_forwarded_headers():
-                    return ToolResult(
-                        content="DIAL core returned a prohibited credential header",
-                        is_error=True,
-                        meta={
-                            "dial.epam.com/error": {
-                                "status_code": 500,
-                                "external_service": "unknown",
-                            }
-                        },
-                    )
                 credential_token = _REQUEST_CREDENTIAL.set((header_name, header_value))
 
             headers_token = _REQUEST_HEADERS.set(
