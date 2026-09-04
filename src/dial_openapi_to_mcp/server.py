@@ -30,6 +30,13 @@ _REQUEST_CREDENTIAL: ContextVar[tuple[str, str] | None] = ContextVar(
 _REQUEST_HEADERS: ContextVar[tuple[tuple[str, str], ...]] = ContextVar(
     "request_headers", default=()
 )
+_MCP_CONTROL_HEADERS = (
+    "x-meta",
+    "x-base-url",
+    "x-extra-headers",
+    "x-dial-application-id",
+    "api-key",
+)
 _SENSITIVE_HEADER_NAMES = {
     "authorization",
     "api-key",
@@ -696,7 +703,7 @@ async def get_or_create_mcp(
                 openapi_spec["servers"].append({"url": base_url})
 
         async def prepare_request(outbound_request: httpx.Request) -> None:
-            for header_name in ("x-meta", "x-base-url", "x-extra-headers"):
+            for header_name in _MCP_CONTROL_HEADERS:
                 outbound_request.headers.pop(header_name, None)
             for header_name, header_value in _REQUEST_HEADERS.get():
                 outbound_request.headers[header_name] = header_value
