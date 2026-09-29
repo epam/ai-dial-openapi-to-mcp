@@ -17,11 +17,13 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.lifespan import lifespan
 from fastmcp.server.middleware import Middleware, MiddlewareContext
+from fastmcp.server.providers.openapi import OpenAPITool
 from fastmcp.tools import Tool, ToolResult
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .cache import CacheEntry, MCPCache
+from .multipart import apply_file_uploads
 from .telemetry import setup_telemetry
 
 _REQUEST_CREDENTIAL: ContextVar[tuple[str, str] | None] = ContextVar(
@@ -480,6 +482,30 @@ def _collect_x_mcp_overrides(
     return (mcp_names or None), _apply_x_mcp_overrides
 
 
+def _build_component_fn(
+    openapi_spec: Dict[str, Any],
+    x_mcp_component_fn: Optional[Callable[[Any, Any], None]],
+) -> Callable[[Any, Any], None]:
+    """Chain x-mcp overrides with tool fixes that apply to every spec (e.g. file uploads)."""
+
+    def _customize_component(route: Any, component: Any) -> None:
+        if x_mcp_component_fn is not None:
+            x_mcp_component_fn(route, component)
+        if isinstance(component, OpenAPITool):
+            try:
+                apply_file_uploads(route, component, openapi_spec)
+            except Exception:
+                # fastmcp would swallow this and keep the tool without upload support.
+                logger.warning(
+                    "Failed to enable file uploads for %s %s",
+                    getattr(route, "method", "?"),
+                    getattr(route, "path", "?"),
+                    exc_info=True,
+                )
+
+    return _customize_component
+
+
 async def _build_extended_openapi_spec(
     openapi_spec: Dict[str, Any],
     overwrite: bool = False,
@@ -718,12 +744,12 @@ async def get_or_create_mcp(
             )
 
         api_name = openapi_spec.get("info", {}).get("title", "Unknown API")
-        mcp_names, mcp_component_fn = _collect_x_mcp_overrides(openapi_spec)
-        from_openapi_kwargs: Dict[str, Any] = {}
+        mcp_names, x_mcp_component_fn = _collect_x_mcp_overrides(openapi_spec)
+        from_openapi_kwargs: Dict[str, Any] = {
+            "mcp_component_fn": _build_component_fn(openapi_spec, x_mcp_component_fn)
+        }
         if mcp_names:
             from_openapi_kwargs["mcp_names"] = mcp_names
-        if mcp_component_fn:
-            from_openapi_kwargs["mcp_component_fn"] = mcp_component_fn
 
         paths = openapi_spec.get("paths", {})
 
