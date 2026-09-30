@@ -25,6 +25,7 @@ from starlette.responses import JSONResponse
 from .cache import CacheEntry, MCPCache
 from .multipart import apply_file_uploads
 from .path_params import apply_path_param_encoding
+from .responses import apply_response_handling
 from .telemetry import setup_telemetry
 
 _REQUEST_CREDENTIAL: ContextVar[tuple[str, str] | None] = ContextVar(
@@ -487,8 +488,12 @@ def _build_component_fn(
     openapi_spec: Dict[str, Any],
     x_mcp_component_fn: Optional[Callable[[Any, Any], None]],
 ) -> Callable[[Any, Any], None]:
-    """Chain x-mcp overrides with tool fixes that apply to every spec (path encoding, uploads)."""
+    """
+    Chain x-mcp overrides with tool fixes that apply to every spec (path encoding, uploads,
+    response handling).
+    """
     allow_reserved_all = _path_params_allow_reserved()
+    validate_output = _validate_output()
 
     def _customize_component(route: Any, component: Any) -> None:
         if x_mcp_component_fn is not None:
@@ -504,6 +509,10 @@ def _build_component_fn(
                 ),
             ),
             ("file uploads", lambda: apply_file_uploads(route, component, openapi_spec)),
+            (
+                "response handling",
+                lambda: apply_response_handling(route, component, openapi_spec, validate_output),
+            ),
         )
         for fix_name, apply_fix in fixes:
             try:
@@ -524,6 +533,11 @@ def _build_component_fn(
 def _path_params_allow_reserved() -> bool:
     """PATH_PARAMS_ALLOW_RESERVED=true keeps '/' in every path parameter of every spec."""
     return os.environ.get("PATH_PARAMS_ALLOW_RESERVED", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _validate_output() -> bool:
+    """MCP_VALIDATE_OUTPUT=false stops validating tool results against the spec's schemas."""
+    return os.environ.get("MCP_VALIDATE_OUTPUT", "").strip().lower() not in {"0", "false", "no"}
 
 
 async def _build_extended_openapi_spec(
