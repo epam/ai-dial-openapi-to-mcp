@@ -52,6 +52,9 @@ _TEXT_MEDIA_TYPES = frozenset(
     }
 )
 
+# Media types that say nothing about the content; such bodies are sniffed for text.
+_UNTYPED_MEDIA_TYPES = frozenset({"", "application/octet-stream"})
+
 _CAPTURED_RESPONSE: ContextVar[httpx.Response | None] = ContextVar(
     "captured_response", default=None
 )
@@ -94,6 +97,20 @@ def _decode_text(response: httpx.Response) -> str | None:
         return response.content.decode(response.encoding or "utf-8")
     except (UnicodeDecodeError, LookupError):
         return None
+
+
+def _decode_untyped_text(response: httpx.Response) -> str | None:
+    """
+    Text for a body without a meaningful type (no Content-Type or application/octet-stream).
+
+    Servers often send files that way (e.g. a stored ``SKILL.md``). Strict UTF-8 without NUL
+    bytes is returned as text, which is lossless; anything else stays binary.
+    """
+    try:
+        text = response.content.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return None if "\x00" in text else text
 
 
 def _parse_json(response: httpx.Response) -> tuple[bool, Any]:
@@ -149,7 +166,12 @@ class ResponseAwareOpenAPITool(OpenAPITool):
             ]
             return ToolResult(content=content + [summary], structured_content=structured, meta=meta)
 
-        text = _decode_text(response) if _is_text_media_type(media_type) or not media_type else None
+        if _is_text_media_type(media_type):
+            text = _decode_text(response)
+        elif media_type in _UNTYPED_MEDIA_TYPES:
+            text = _decode_untyped_text(response)
+        else:
+            text = None
         if text is not None:
             return ToolResult(
                 content=[TextContent(type="text", text=text), summary],
@@ -216,12 +238,24 @@ def _success_responses(route: HTTPRoute) -> dict[str, Any]:
 
 
 def _declared_json_success(route: HTTPRoute) -> bool:
+    """
+    Whether a 2xx response declares a JSON document. A JSON media type whose schema is just
+    ``type: string, format: binary`` describes file content, not a JSON document.
+    """
     for info in _success_responses(route).values():
-        for media_type in (info.content_schema or {}).keys():
+        for media_type, schema in (info.content_schema or {}).items():
             normalized = media_type.split(";")[0].strip().lower()
-            if _is_json_media_type(normalized):
+            if _is_json_media_type(normalized) and not _is_binary_string_schema(schema):
                 return True
     return False
+
+
+def _is_binary_string_schema(schema: Any) -> bool:
+    return (
+        isinstance(schema, dict)
+        and schema.get("type") == "string"
+        and schema.get("format") == "binary"
+    )
 
 
 def _declared_response_headers(openapi_spec: dict[str, Any] | None, route: HTTPRoute) -> set[str]:

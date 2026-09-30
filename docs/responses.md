@@ -12,6 +12,7 @@ The response `Content-Type` decides the result, not the media type the spec decl
 |---|---|
 | JSON (`application/json`, `*+json`) | structured content (validated, see below) plus the JSON as text |
 | text (`text/*`, XML, YAML, …) | a text block with the body |
+| untyped (no `Content-Type`, `application/octet-stream`) | text if it is valid UTF-8 without NUL bytes (lossless), otherwise binary as below |
 | image (`image/*`) / audio (`audio/*`) | an image / audio block, base64 encoded |
 | any other binary | an embedded blob resource (`uri` is the request URL without its query) |
 | empty | only the status line below |
@@ -44,4 +45,5 @@ with `Output validation error: ...` on a mismatch.
   [CONFIGURATION.md](../CONFIGURATION.md#tool-responses)). Tools then publish no output schema.
 - Add `x-mcp: {validateOutput: false}` to an operation to turn it off for that tool only, or
   `validateOutput: true` to keep it on when the global switch is off.
-- Operations whose 2xx responses declare no JSON body publish no output schema.
+- Operations whose 2xx responses declare no JSON body publish no output schema. A JSON media
+  type whose schema is just `type: string, format: binary` counts as file content, not JSON.

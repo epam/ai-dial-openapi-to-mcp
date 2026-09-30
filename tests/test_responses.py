@@ -172,10 +172,41 @@ async def test_text_body_on_json_declared_route_is_returned_as_text():
 
     result = await _call(handler, "getFile")
 
-    assert _texts(result)[0] == body
-    # The declared schema is a wrapped string, so the text also satisfies it.
-    assert result.structured_content == {"result": body}
+    assert _texts(result) == [
+        body,
+        "HTTP 200; content-type: text/markdown, etag: e2, content-length: 31",
+    ]
+    # A JSON "string/binary" schema describes file content: no output schema, no wrapper.
+    assert result.structured_content is None
+    assert (await _tools())["getFile"].output_schema is None
     assert result.meta[RESPONSE_META_KEY]["headers"]["etag"] == "e2"
+
+
+@pytest.mark.asyncio
+async def test_untyped_utf8_body_is_returned_as_text():
+    body = "# Stored as octet-stream\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=body.encode(), headers={"Content-Type": "application/octet-stream"}
+        )
+
+    result = await _call(handler, "getFile")
+    assert _texts(result)[0] == body
+
+
+@pytest.mark.asyncio
+async def test_untyped_binary_body_stays_binary():
+    data = b"\x00\x01\xffbinary"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=data, headers={"Content-Type": "application/octet-stream"}
+        )
+
+    result = await _call(handler, "getFile")
+    (resource,) = [block for block in result.content if isinstance(block, EmbeddedResource)]
+    assert base64.b64decode(resource.resource.blob) == data
 
 
 @pytest.mark.asyncio
