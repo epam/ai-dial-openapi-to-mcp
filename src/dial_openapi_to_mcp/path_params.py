@@ -26,10 +26,14 @@ def encode_path_value(name: str, value: Any, allow_slash: bool) -> str:
     Percent-encode one path parameter value.
 
     ``.`` is kept (quote treats it as unreserved), so file names survive; a value that is, or
-    with ``allow_slash`` contains, a ``.``/``..``/empty segment is rejected because it would
-    change which resource the URL addresses.
+    with ``allow_slash`` contains, a ``.``/``..`` segment is rejected because it would change
+    which resource the URL addresses. An empty value is allowed (APIs use it for "root", e.g.
+    listing a folder), but empty segments inside a slash-separated value are not: a leading
+    ``//`` would make the URL a network-path reference to another host.
     """
     text = str(value)
+    if text == "":
+        return ""
     segments = text.split("/") if allow_slash else [text]
     for segment in segments:
         if segment in _TRAVERSAL_SEGMENTS or segment == "":

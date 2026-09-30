@@ -111,6 +111,8 @@ async def _call(spec: dict[str, Any], tool: str, arguments: dict[str, Any]) -> s
         ("my skill/ü?#", True, "my%20skill/%C3%BC%3F%23"),
         ("a%2Fb", True, "a%252Fb"),
         (42, False, "42"),
+        ("", False, ""),
+        ("", True, ""),
     ],
 )
 def test_encode_path_value(value, allow_slash, expected):
@@ -122,7 +124,6 @@ def test_encode_path_value(value, allow_slash, expected):
     [
         ("..", False),
         (".", False),
-        ("", False),
         ("a/../b", True),
         ("./a", True),
         ("a//b", True),
@@ -166,6 +167,12 @@ async def test_env_var_allows_slashes_for_every_path_parameter(monkeypatch):
         _spec(), "getFile", {"bucket": "b1", "path": "skills/x", "filePath": "SKILL.md"}
     )
     assert url == f"{BASE_URL}/files/b1/skills/x/files/SKILL.md"
+
+
+@pytest.mark.asyncio
+async def test_empty_value_addresses_the_root():
+    url = await _call(_spec(), "getFile", {"bucket": "b1", "path": "x", "filePath": ""})
+    assert url == f"{BASE_URL}/files/b1/x/files/"
 
 
 @pytest.mark.asyncio
