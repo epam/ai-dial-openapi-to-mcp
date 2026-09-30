@@ -24,6 +24,7 @@ from starlette.responses import JSONResponse
 
 from .cache import CacheEntry, MCPCache
 from .multipart import apply_file_uploads
+from .path_params import apply_path_param_encoding
 from .telemetry import setup_telemetry
 
 _REQUEST_CREDENTIAL: ContextVar[tuple[str, str] | None] = ContextVar(
@@ -486,24 +487,43 @@ def _build_component_fn(
     openapi_spec: Dict[str, Any],
     x_mcp_component_fn: Optional[Callable[[Any, Any], None]],
 ) -> Callable[[Any, Any], None]:
-    """Chain x-mcp overrides with tool fixes that apply to every spec (e.g. file uploads)."""
+    """Chain x-mcp overrides with tool fixes that apply to every spec (path encoding, uploads)."""
+    allow_reserved_all = _path_params_allow_reserved()
 
     def _customize_component(route: Any, component: Any) -> None:
         if x_mcp_component_fn is not None:
             x_mcp_component_fn(route, component)
-        if isinstance(component, OpenAPITool):
+        if not isinstance(component, OpenAPITool):
+            return
+        # Order matters: the upload director wraps the path director and reuses its URL building.
+        fixes: tuple[tuple[str, Callable[[], Any]], ...] = (
+            (
+                "path parameter encoding",
+                lambda: apply_path_param_encoding(
+                    route, component, openapi_spec, allow_reserved_all
+                ),
+            ),
+            ("file uploads", lambda: apply_file_uploads(route, component, openapi_spec)),
+        )
+        for fix_name, apply_fix in fixes:
             try:
-                apply_file_uploads(route, component, openapi_spec)
+                apply_fix()
             except Exception:
-                # fastmcp would swallow this and keep the tool without upload support.
+                # fastmcp would swallow this and keep the tool without the fix.
                 logger.warning(
-                    "Failed to enable file uploads for %s %s",
+                    "Failed to apply %s for %s %s",
+                    fix_name,
                     getattr(route, "method", "?"),
                     getattr(route, "path", "?"),
                     exc_info=True,
                 )
 
     return _customize_component
+
+
+def _path_params_allow_reserved() -> bool:
+    """PATH_PARAMS_ALLOW_RESERVED=true keeps '/' in every path parameter of every spec."""
+    return os.environ.get("PATH_PARAMS_ALLOW_RESERVED", "").strip().lower() in {"1", "true", "yes"}
 
 
 async def _build_extended_openapi_spec(

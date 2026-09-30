@@ -35,6 +35,12 @@ The block list takes precedence over the allowlist. By default, the bridge block
 
 All forwarded header values are read from the current request and injected only into that request's outbound call. They are not written to shared client defaults or cache entries.
 
+## Path parameters
+
+| Variable | Default | Required | Description |
+|---|---:|---|---|
+| `PATH_PARAMS_ALLOW_RESERVED` | `false` | No | `true` keeps `/` unencoded in every path parameter of every spec. Otherwise only parameters marked `x-mcp-allow-reserved: true` or `allowReserved: true` keep it. Empty, `.` and `..` segments are always rejected. See [docs/path-parameters.md](docs/path-parameters.md). |
+
 ## DIAL credentials
 
 | Variable | Default | Required | Description |
