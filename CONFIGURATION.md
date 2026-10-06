@@ -41,6 +41,12 @@ All forwarded header values are read from the current request and injected only 
 |---|---:|---|---|
 | `PATH_PARAMS_ALLOW_RESERVED` | `false` | No | `true` keeps `/` unencoded in every path parameter of every spec. Otherwise only parameters marked `x-mcp-allow-reserved: true` or `allowReserved: true` keep it. Empty, `.` and `..` segments are always rejected. See [docs/path-parameters.md](docs/path-parameters.md). |
 
+## Tool responses
+
+| Variable | Default | Required | Description |
+|---|---:|---|---|
+| `MCP_VALIDATE_OUTPUT` | `true` | No | `false` stops validating JSON tool results against the output schemas derived from the spec, and tools publish no output schema. Per operation, `x-mcp: {validateOutput: false}` (or `true`) overrides it. See [docs/responses.md](docs/responses.md). |
+
 ## DIAL credentials
 
 | Variable | Default | Required | Description |
