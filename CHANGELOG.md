@@ -9,6 +9,7 @@ The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ### Fixed
 
 - `multipart/form-data` properties with `format: binary` (single or array) are sent as real file parts with a filename and content type instead of plain form fields, so file upload endpoints accept them. File values can be text, a `data:` URI, or an object `{filename, content, contentType, encoding}`. See [docs/file-uploads.md](docs/file-uploads.md).
+- Path parameters keep `.` (`SKILL.md` was sent as `SKILL%2Emd`), and keep `/` when the parameter is marked `x-mcp-allow-reserved: true` / `allowReserved: true` or `PATH_PARAMS_ALLOW_RESERVED=true` is set. Empty, `.` and `..` segments are rejected. See [docs/path-parameters.md](docs/path-parameters.md).
 
 ## [0.1.0] - 2026-07-29
 

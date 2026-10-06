@@ -208,7 +208,12 @@ class FileUploadRequestDirector(RequestDirector):
 
     def __init__(self, director: RequestDirector, binary_properties: dict[str, BinaryProperty]):
         super().__init__(director._spec)
+        self._wrapped = director
         self._binary_properties = binary_properties
+
+    def _build_url(self, path_template: str, path_params: dict[str, Any], base_url: str) -> str:
+        # Keep the wrapped director's URL building (e.g. path parameter encoding).
+        return self._wrapped._build_url(path_template, path_params, base_url)
 
     def build(
         self,
