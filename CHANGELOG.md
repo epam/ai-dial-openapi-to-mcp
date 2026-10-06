@@ -6,6 +6,10 @@ The project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Fixed
+
+- `multipart/form-data` properties with `format: binary` (single or array) are sent as real file parts with a filename and content type instead of plain form fields, so file upload endpoints accept them. File values can be text, a `data:` URI, or an object `{filename, content, contentType, encoding}`. See [docs/file-uploads.md](docs/file-uploads.md).
+
 ## [0.1.0] - 2026-07-29
 
 ### Added
