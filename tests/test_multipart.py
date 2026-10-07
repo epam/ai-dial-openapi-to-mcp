@@ -162,6 +162,30 @@ def test_to_file_parts_plain_string_is_never_guessed_as_base64():
     assert to_file_parts(BinaryProperty("SKILL.md", False), "SKILL")[0][1] == b"SKILL"
 
 
+def test_to_file_parts_json_string_file_object_is_parsed():
+    value = '{"filename": "SKILL.md", "content": "# Skill\\n"}'
+    assert to_file_parts(BinaryProperty("file", False), value) == [
+        ("SKILL.md", b"# Skill\n", "text/markdown")
+    ]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        '{"name": "x", "content": "y"}',
+        '{"content": 1}',
+        '["SKILL.md"]',
+        "{not json",
+        '{"filename": "a.txt"}',
+    ],
+)
+def test_to_file_parts_other_json_strings_are_sent_verbatim(value):
+    assert to_file_parts(BinaryProperty("data.json", False), value)[0][:2] == (
+        "data.json",
+        value.encode(),
+    )
+
+
 def test_to_file_parts_uses_spec_encoding_content_type():
     prop = BinaryProperty("file", False, "application/zip")
     assert to_file_parts(prop, {"content": "x"})[0][2] == "application/zip"
@@ -221,6 +245,19 @@ async def test_upload_sends_real_file_part_with_filename():
             "content_type": "text/markdown",
             "data": b"# Skill\n",
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_upload_accepts_file_object_serialized_as_string():
+    request = await _call(
+        _spec(SINGLE_FILE_BODY),
+        "upload",
+        {"bucket": "b1", "file": '{"filename": "SKILL.md", "content": "# Skill\\n"}'},
+    )
+
+    assert [(p["name"], p["filename"], p["data"]) for p in _parts(request)] == [
+        ("file", "SKILL.md", b"# Skill\n")
     ]
 
 

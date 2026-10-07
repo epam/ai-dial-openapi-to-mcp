@@ -8,6 +8,7 @@ This module turns such arguments into file parts, driven only by the OpenAPI req
 
 import base64
 import binascii
+import json
 import logging
 import mimetypes
 from dataclasses import dataclass
@@ -25,6 +26,8 @@ _DEFAULT_CONTENT_TYPE = "application/octet-stream"
 _DATA_URI_PREFIX = "data:"
 
 _FileTuple = tuple[str, bytes, str]
+
+_FILE_OBJECT_KEYS = frozenset({"filename", "content", "contentType", "encoding"})
 
 
 @dataclass(frozen=True)
@@ -115,10 +118,34 @@ def _decode_content(content: str, encoding: str | None) -> tuple[bytes, str | No
     return content.encode("utf-8"), None
 
 
+def _parse_file_object_string(value: str) -> dict[str, Any] | None:
+    """Return the file object when a string is a JSON-serialized ``{content, ...}`` object.
+
+    Clients often serialize object arguments into strings. Only an object whose keys are all file
+    object keys and whose ``content`` is a string qualifies, so ordinary text and JSON documents
+    are still sent as file content.
+    """
+    if not value.lstrip().startswith("{"):
+        return None
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return None
+    if (
+        isinstance(parsed, dict)
+        and isinstance(parsed.get("content"), str)
+        and parsed.keys() <= _FILE_OBJECT_KEYS
+    ):
+        return parsed
+    return None
+
+
 def to_file_part(prop: BinaryProperty, value: Any) -> _FileTuple:
     """Convert one tool argument value into an httpx file tuple (filename, bytes, content type)."""
     filename: str | None = None
     content_type: str | None = None
+    if isinstance(value, str):
+        value = _parse_file_object_string(value) or value
     if isinstance(value, str):
         data, uri_type = _decode_content(value, None)
     elif isinstance(value, dict):
