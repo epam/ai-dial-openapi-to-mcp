@@ -24,6 +24,10 @@ Tool arguments are JSON, so a file value is one of:
   - `encoding`: `"text"` (default) or `"base64"`.
 - **a list** of the above, for array properties.
 
+Some clients serialize object arguments into strings. A string that is a JSON object with a string
+`content` and no keys other than `filename`, `content`, `contentType` and `encoding` is read as that
+object. Any other string, including other JSON documents, is sent as file content.
+
 Plain strings are never guessed to be base64: text such as `SKILL` is valid base64 too. Binary
 content must be passed as a `data:` URI or with `encoding: "base64"`.
 
