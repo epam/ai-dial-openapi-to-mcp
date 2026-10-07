@@ -18,7 +18,10 @@ logger = logging.getLogger(__name__)
 
 ALLOW_RESERVED_EXTENSION = "x-mcp-allow-reserved"
 _TRAVERSAL_SEGMENTS = frozenset({".", ".."})
-_SLASH_NOTE = "May contain '/' to address a nested path; '.' and '..' segments are not allowed."
+_SLASH_NOTE = (
+    "May contain '/' to address a nested path, and end with '/' to address a folder; "
+    "'.' and '..' segments are not allowed."
+)
 
 
 def encode_path_value(name: str, value: Any, allow_slash: bool) -> str:
@@ -28,12 +31,16 @@ def encode_path_value(name: str, value: Any, allow_slash: bool) -> str:
     ``.`` is kept (quote treats it as unreserved), so file names survive; a value that is, or
     with ``allow_slash`` contains, a ``.``/``..`` segment is rejected because it would change
     which resource the URL addresses. An empty value is allowed (APIs use it for "root", e.g.
-    listing a folder), but empty segments inside a slash-separated value are not: a leading
-    ``//`` would make the URL a network-path reference to another host.
+    listing a folder), and with ``allow_slash`` so is one trailing ``/`` (APIs use it to address
+    a folder rather than an item). Other empty segments are not: a leading ``//`` would make the
+    URL a network-path reference to another host.
     """
     text = str(value)
     if text == "":
         return ""
+    trailing_slash = allow_slash and text.endswith("/")
+    if trailing_slash:
+        text = text[:-1]
     segments = text.split("/") if allow_slash else [text]
     for segment in segments:
         if segment in _TRAVERSAL_SEGMENTS or segment == "":
@@ -41,7 +48,8 @@ def encode_path_value(name: str, value: Any, allow_slash: bool) -> str:
                 f"Invalid value for path parameter '{name}': empty, '.' and '..' segments "
                 "are not allowed"
             )
-    return "/".join(quote(segment, safe="") for segment in segments)
+    encoded = "/".join(quote(segment, safe="") for segment in segments)
+    return f"{encoded}/" if trailing_slash else encoded
 
 
 class PathParamRequestDirector(RequestDirector):

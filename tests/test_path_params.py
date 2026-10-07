@@ -113,6 +113,9 @@ async def _call(spec: dict[str, Any], tool: str, arguments: dict[str, Any]) -> s
         (42, False, "42"),
         ("", False, ""),
         ("", True, ""),
+        ("a/", True, "a/"),
+        ("a/b c/", True, "a/b%20c/"),
+        ("a/", False, "a%2F"),
     ],
 )
 def test_encode_path_value(value, allow_slash, expected):
@@ -128,7 +131,9 @@ def test_encode_path_value(value, allow_slash, expected):
         ("./a", True),
         ("a//b", True),
         ("/a", True),
-        ("a/", True),
+        ("/", True),
+        ("a//", True),
+        ("../", True),
     ],
 )
 def test_encode_path_value_rejects_traversal_and_empty_segments(value, allow_slash):
@@ -167,6 +172,13 @@ async def test_env_var_allows_slashes_for_every_path_parameter(monkeypatch):
         _spec(), "getFile", {"bucket": "b1", "path": "skills/x", "filePath": "SKILL.md"}
     )
     assert url == f"{BASE_URL}/files/b1/skills/x/files/SKILL.md"
+
+
+@pytest.mark.asyncio
+async def test_trailing_slash_addresses_a_folder(monkeypatch):
+    monkeypatch.setenv("PATH_PARAMS_ALLOW_RESERVED", "true")
+    url = await _call(_spec(), "upload", {"path": "skills/my-skill/", "file": "x"})
+    assert url == f"{BASE_URL}/upload/skills/my-skill/"
 
 
 @pytest.mark.asyncio

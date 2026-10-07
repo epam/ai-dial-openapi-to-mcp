@@ -7,8 +7,9 @@ Path parameter values are percent-encoded before they are substituted into the U
 - `/` is encoded as `%2F` by default, so a value can never address a different path. A parameter
   that is itself a hierarchical path (`folder/sub/file.txt`) can opt in to keep `/`.
 - Values that are, or contain, a `.` or `..` segment, and slash-separated values with an empty
-  segment (`a//b`, `/a`, `a/`), are rejected before any request is sent, so opted-in parameters
+  segment (`a//b`, `/a`, `/`), are rejected before any request is sent, so opted-in parameters
   cannot be used for path traversal. An empty value is allowed; APIs use it to address a root.
+  One trailing `/` (`a/b/`) is kept for opted-in parameters; APIs use it to address a folder.
 
 ## Keeping `/` in a parameter
 
