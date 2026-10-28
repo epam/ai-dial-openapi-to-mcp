@@ -21,6 +21,7 @@ OpenAPI to MCP is a DIAL-compatible bridge that creates MCP tools from a client-
 ## Documentation
 
 - [Configuration reference](CONFIGURATION.md)
+- [Configuring a DIAL application](docs/dial-application-setup.md)
 - [Technical documentation](docs/README.md)
 - [Setup guide](docs/SETUP.md)
 - [Security model](SECURITY.md)

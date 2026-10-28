@@ -61,6 +61,8 @@ The result's `_meta` carries machine-readable detail distinguishing why credenti
 - `_meta["dial.epam.com/error"]` — always present on failure: `{"status_code": <int>, "external_service": <str>}`. `status_code` is `404` when `external_service` is not configured on the DIAL application, `401` when it is configured but DIAL Core has no stored credential yet, or `500` for other configuration and credential-service errors.
 - `_meta["dial.epam.com/auth-challenge"]` — present only for `401`: a list of `{"method": "external-service/signin", "scope": <str>}` objects. `scope` is `<application>/external_services/<external_service>` and can be sent as `params.url` in an `external-service/signin` JSON-RPC request. After sign-in completes, retry the original tool call.
 
+See [Configuring a DIAL application](docs/dial-application-setup.md) for how to add an external service entry and set `external_service` on the application itself.
+
 ## Health & readiness
 
 | Path | Purpose | Response |
