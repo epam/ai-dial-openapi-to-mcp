@@ -17,11 +17,15 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.lifespan import lifespan
 from fastmcp.server.middleware import Middleware, MiddlewareContext
+from fastmcp.server.providers.openapi import OpenAPITool
 from fastmcp.tools import Tool, ToolResult
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .cache import CacheEntry, MCPCache
+from .multipart import apply_file_uploads
+from .path_params import apply_path_param_encoding
+from .responses import apply_response_handling
 from .telemetry import setup_telemetry
 
 _REQUEST_CREDENTIAL: ContextVar[tuple[str, str] | None] = ContextVar(
@@ -29,6 +33,13 @@ _REQUEST_CREDENTIAL: ContextVar[tuple[str, str] | None] = ContextVar(
 )
 _REQUEST_HEADERS: ContextVar[tuple[tuple[str, str], ...]] = ContextVar(
     "request_headers", default=()
+)
+_MCP_CONTROL_HEADERS = (
+    "x-meta",
+    "x-base-url",
+    "x-extra-headers",
+    "x-dial-application-id",
+    "api-key",
 )
 _SENSITIVE_HEADER_NAMES = {
     "authorization",
@@ -473,6 +484,62 @@ def _collect_x_mcp_overrides(
     return (mcp_names or None), _apply_x_mcp_overrides
 
 
+def _build_component_fn(
+    openapi_spec: Dict[str, Any],
+    x_mcp_component_fn: Optional[Callable[[Any, Any], None]],
+) -> Callable[[Any, Any], None]:
+    """
+    Chain x-mcp overrides with tool fixes that apply to every spec (path encoding, uploads,
+    response handling).
+    """
+    allow_reserved_all = _path_params_allow_reserved()
+    validate_output = _validate_output()
+
+    def _customize_component(route: Any, component: Any) -> None:
+        if x_mcp_component_fn is not None:
+            x_mcp_component_fn(route, component)
+        if not isinstance(component, OpenAPITool):
+            return
+        # Order matters: the upload director wraps the path director and reuses its URL building.
+        fixes: tuple[tuple[str, Callable[[], Any]], ...] = (
+            (
+                "path parameter encoding",
+                lambda: apply_path_param_encoding(
+                    route, component, openapi_spec, allow_reserved_all
+                ),
+            ),
+            ("file uploads", lambda: apply_file_uploads(route, component, openapi_spec)),
+            (
+                "response handling",
+                lambda: apply_response_handling(route, component, openapi_spec, validate_output),
+            ),
+        )
+        for fix_name, apply_fix in fixes:
+            try:
+                apply_fix()
+            except Exception:
+                # fastmcp would swallow this and keep the tool without the fix.
+                logger.warning(
+                    "Failed to apply %s for %s %s",
+                    fix_name,
+                    getattr(route, "method", "?"),
+                    getattr(route, "path", "?"),
+                    exc_info=True,
+                )
+
+    return _customize_component
+
+
+def _path_params_allow_reserved() -> bool:
+    """PATH_PARAMS_ALLOW_RESERVED=true keeps '/' in every path parameter of every spec."""
+    return os.environ.get("PATH_PARAMS_ALLOW_RESERVED", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _validate_output() -> bool:
+    """MCP_VALIDATE_OUTPUT=false stops validating tool results against the spec's schemas."""
+    return os.environ.get("MCP_VALIDATE_OUTPUT", "").strip().lower() not in {"0", "false", "no"}
+
+
 async def _build_extended_openapi_spec(
     openapi_spec: Dict[str, Any],
     overwrite: bool = False,
@@ -696,7 +763,7 @@ async def get_or_create_mcp(
                 openapi_spec["servers"].append({"url": base_url})
 
         async def prepare_request(outbound_request: httpx.Request) -> None:
-            for header_name in ("x-meta", "x-base-url", "x-extra-headers"):
+            for header_name in _MCP_CONTROL_HEADERS:
                 outbound_request.headers.pop(header_name, None)
             for header_name, header_value in _REQUEST_HEADERS.get():
                 outbound_request.headers[header_name] = header_value
@@ -711,12 +778,12 @@ async def get_or_create_mcp(
             )
 
         api_name = openapi_spec.get("info", {}).get("title", "Unknown API")
-        mcp_names, mcp_component_fn = _collect_x_mcp_overrides(openapi_spec)
-        from_openapi_kwargs: Dict[str, Any] = {}
+        mcp_names, x_mcp_component_fn = _collect_x_mcp_overrides(openapi_spec)
+        from_openapi_kwargs: Dict[str, Any] = {
+            "mcp_component_fn": _build_component_fn(openapi_spec, x_mcp_component_fn)
+        }
         if mcp_names:
             from_openapi_kwargs["mcp_names"] = mcp_names
-        if mcp_component_fn:
-            from_openapi_kwargs["mcp_component_fn"] = mcp_component_fn
 
         paths = openapi_spec.get("paths", {})
 
@@ -1051,17 +1118,6 @@ class OpenAPI2MCPBridge(Middleware):
                 if not isinstance(header_name, str) or not isinstance(header_value, str):
                     return ToolResult(
                         content="DIAL core returned an invalid credential",
-                        is_error=True,
-                        meta={
-                            "dial.epam.com/error": {
-                                "status_code": 500,
-                                "external_service": "unknown",
-                            }
-                        },
-                    )
-                if header_name.lower() in _resolve_blocked_forwarded_headers():
-                    return ToolResult(
-                        content="DIAL core returned a prohibited credential header",
                         is_error=True,
                         meta={
                             "dial.epam.com/error": {
