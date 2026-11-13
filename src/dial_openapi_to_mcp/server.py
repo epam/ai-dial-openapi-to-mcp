@@ -26,6 +26,15 @@ from .cache import CacheEntry, MCPCache
 from .multipart import apply_file_uploads
 from .path_params import apply_path_param_encoding
 from .responses import apply_response_handling
+from .spec_fetch import (
+    SpecFetchError,
+    fetch_openapi_spec,
+    parse_spec_text,
+    resolve_base_url,
+    spec_text_to_json,
+)
+from .swagger2 import convert_swagger2_to_openapi30 as _convert_swagger2_to_openapi30
+from .swagger2 import rewrite_refs as _rewrite_refs
 from .telemetry import setup_telemetry
 
 _REQUEST_CREDENTIAL: ContextVar[tuple[str, str] | None] = ContextVar(
@@ -36,6 +45,7 @@ _REQUEST_HEADERS: ContextVar[tuple[tuple[str, str], ...]] = ContextVar(
 )
 _MCP_CONTROL_HEADERS = (
     "x-meta",
+    "x-openapi-url",
     "x-base-url",
     "x-extra-headers",
     "x-dial-application-id",
@@ -85,6 +95,12 @@ APPLICATION_SCHEMA: Dict[str, Any] = json.loads(
     .joinpath("application_schema.json")
     .read_text(encoding="utf-8")
 )
+
+
+# (base URL, raw spec text) digest -> api_id, so repeat requests with the same spec text
+# skip parsing. Holds only short strings; the MCP entries themselves live in _mcp_cache.
+_API_ID_MEMO: Dict[str, str] = {}
+_API_ID_MEMO_MAX = 1024
 
 
 def get_api_id(spec: Dict[str, Any], base_url: Optional[str]) -> str:
@@ -148,12 +164,7 @@ def _normalize_spec_to_json(spec: Any) -> str:
         if stripped.startswith('{'):
             return spec
         try:
-            import yaml
-
-            spec_dict = yaml.safe_load(stripped)
-            if not isinstance(spec_dict, dict):
-                raise ValueError(f"YAML did not produce a dict: {type(spec_dict)}")
-            return json.dumps(spec_dict)
+            return spec_text_to_json(stripped)
         except Exception as e:
             raise ValueError(f"Cannot parse spec as JSON or YAML: {e}") from e
     raise ValueError(f"Unsupported spec type: {type(spec)}")
@@ -293,12 +304,89 @@ async def _resolve_dial_credentials(request: Request) -> Optional[Dict[str, Any]
     return creds
 
 
+def _fetch_sends_auth() -> bool:
+    """OPENAPI_FETCH_SEND_AUTH=true sends extra_headers and the DIAL credential on the schema GET."""
+    return os.environ.get("OPENAPI_FETCH_SEND_AUTH", "").strip().lower() in {"1", "true", "yes"}
+
+
+async def _extract_openapi_url(request: Request) -> Optional[str]:
+    """Find a schema URL: X-OPENAPI-URL header > ai_dial_config.openapi_url > _meta.openapi_url."""
+    header_url = request.headers.get("x-openapi-url")
+    if header_url and header_url.strip():
+        return header_url.strip()
+    try:
+        request_body = await request.json()
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    params = request_body.get("params") if isinstance(request_body, dict) else None
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    if not isinstance(meta, dict):
+        return None
+    ai_dial_config = meta.get("ai_dial_config")
+    candidates = [
+        ai_dial_config.get("openapi_url") if isinstance(ai_dial_config, dict) else None,
+        meta.get("openapi_url"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+async def _load_spec_from_url(
+    request: Request, spec_url: str, base_url: Optional[str]
+) -> Tuple[str, Optional[str]]:
+    """Fetch the schema (JSON or YAML) and return it as JSON text with its base URL.
+
+    By default the fetch is anonymous. With OPENAPI_FETCH_SEND_AUTH=true it carries the same
+    forwarded headers and DIAL external-service credential as the API calls, so protected
+    schema endpoints work; the schema host then receives those credentials.
+    """
+    fetch_headers: list[tuple[str, str]] = []
+    if _fetch_sends_auth():
+        fetch_headers = [
+            (entry["name"], entry["value"]) for entry in await _extract_extra_headers(request)
+        ]
+        try:
+            credential = await _resolve_dial_credentials(request)
+        except DialCredentialsError as error:
+            logger.warning("Fetching OpenAPI spec without DIAL credential: %s", error)
+            credential = None
+        if credential and isinstance(credential.get("header_name"), str):
+            fetch_headers.append((credential["header_name"], str(credential.get("header_value"))))
+
+    logger.debug(
+        "Fetching OpenAPI spec from %s (auth %s)",
+        _safe_destination(httpx.URL(spec_url)),
+        "sent" if fetch_headers else "not sent",
+    )
+    spec_json = await fetch_openapi_spec(spec_url, fetch_headers)
+    spec_dict = json.loads(spec_json)
+    resolved_base = resolve_base_url(
+        spec_dict, spec_url, base_url or _base_url_from_spec(spec_dict)
+    )
+    return spec_json, resolved_base
+
+
 async def _extract_spec_from_request(request: Request) -> Tuple[Optional[str], Optional[str]]:
     """
-    Extract OpenAPI spec from X-META header or MCP metadata.
-    Priority: X-META header > _meta.openapi in request body
+    Extract the OpenAPI spec for a request.
+    Priority: inline spec (X-META header, ai_dial_config.openapi, _meta.openapi) >
+    schema URL (X-OPENAPI-URL header, ai_dial_config.openapi_url, _meta.openapi_url).
     Returns: (OpenAPI spec as JSON string or None, base_url or None)
+    Raises ValueError (SpecFetchError) when a schema URL is given but cannot be loaded.
     """
+    spec, base_url = await _extract_inline_spec(request)
+    if not _is_empty_spec_json(spec):
+        return spec, base_url
+    spec_url = await _extract_openapi_url(request)
+    if not spec_url:
+        return spec, base_url
+    return await _load_spec_from_url(request, spec_url, base_url)
+
+
+async def _extract_inline_spec(request: Request) -> Tuple[Optional[str], Optional[str]]:
+    """Extract an inline OpenAPI spec from the X-META header or MCP metadata."""
     base_url = None
     spec = None
 
@@ -540,6 +628,15 @@ def _validate_output() -> bool:
     return os.environ.get("MCP_VALIDATE_OUTPUT", "").strip().lower() not in {"0", "false", "no"}
 
 
+def _dereference_schemas() -> bool:
+    """MCP_DEREFERENCE_SCHEMAS=false keeps $ref/$defs in tool schemas instead of inlining them.
+
+    Inlining (the default) is what FastMCP does out of the box, but deeply recursive specs
+    can expand to 100+ MB of schemas and take about a minute per build.
+    """
+    return os.environ.get("MCP_DEREFERENCE_SCHEMAS", "").strip().lower() not in {"0", "false", "no"}
+
+
 async def _build_extended_openapi_spec(
     openapi_spec: Dict[str, Any],
     overwrite: bool = False,
@@ -613,6 +710,9 @@ async def _build_extended_openapi_spec(
         mcp_instance = FastMCP.from_openapi(
             openapi_spec=spec_copy,
             client=client,
+            # Always inline: _inline_refs below only understands #/components/schemas refs, so
+            # kept #/$defs refs would be silently dropped from the generated x-mcp schemas.
+            dereference_schemas=True,
         )
 
         tools_list = await mcp_instance.list_tools()
@@ -706,35 +806,48 @@ async def get_or_create_mcp(
     extra_headers: Optional[list[dict[str, str]]] = None,
 ) -> Optional[CacheEntry]:
     """Get or create MCP instance for an OpenAPI spec (supports JSON and YAML)"""
+    # Validate the request's forwarded headers first, so the cache fast path below can never
+    # skip the block/allow list checks.
     try:
-        openapi_spec = json.loads(spec_json)
-        logger.debug("Parsed OpenAPI spec as JSON")
-    except json.JSONDecodeError:
-        try:
-            import yaml
+        if extra_headers is None:
+            extra_headers = await _extract_extra_headers(request)
+    except Exception as e:
+        logger.error(f"Error creating MCP: {e}", exc_info=True)
+        return None
 
-            openapi_spec = yaml.safe_load(spec_json)
-            logger.debug("Parsed OpenAPI spec as YAML")
-        except ImportError:
-            logger.error(
-                "YAML parsing failed: pyyaml not installed. Install with: pip install pyyaml"
-            )
-            return None
-        except Exception as yaml_error:
-            logger.error(f"Failed to parse OpenAPI spec: {yaml_error}")
-            return None
+    # Fast path: the same spec text and base URL were seen before and the entry is still
+    # cached, so skip parsing/hashing (YAML parsing alone costs ~1 s for a large spec).
+    memo_key = hashlib.sha256(f"{base_url or ''}\0{spec_json}".encode()).hexdigest()
+    remembered_id = _API_ID_MEMO.get(memo_key)
+    if remembered_id is not None:
+        cached_entry = await _mcp_cache.get(remembered_id)
+        if cached_entry is not None:
+            return cached_entry
 
-    if not isinstance(openapi_spec, dict):
-        logger.error("OpenAPI spec must be a JSON or YAML object")
+    try:
+        openapi_spec = parse_spec_text(spec_json)
+    except ValueError as parse_error:
+        logger.error(f"Failed to parse OpenAPI spec: {parse_error}")
         return None
 
     swagger_version = openapi_spec.get("swagger")
     openapi_version = openapi_spec.get("openapi", "")
     if swagger_version:
-        logger.error(
-            f"Unsupported spec: Swagger {swagger_version} (OpenAPI 2.x) is not supported; convert to OpenAPI 3.x first"
-        )
-        return None
+        if not str(swagger_version).startswith("2."):
+            logger.error(f"Unsupported Swagger version: {swagger_version!r}")
+            return None
+        if not base_url:
+            # Swagger host/basePath/schemes are dropped by conversion when host is absent.
+            base_url = _base_url_from_spec(openapi_spec)
+        try:
+            openapi_spec = _convert_swagger2_to_openapi30(openapi_spec)
+        except Exception as convert_error:
+            logger.error(f"Failed to convert Swagger {swagger_version} spec: {convert_error}")
+            return None
+        logger.debug("Converted Swagger %s spec to OpenAPI 3.0", swagger_version)
+        openapi_version = openapi_spec["openapi"]
+    if not isinstance(openapi_version, str):
+        openapi_version = ""
     if openapi_version and not openapi_version.startswith("3."):
         logger.error(
             f"Unsupported OpenAPI version: {openapi_version!r}; only OpenAPI 3.x is supported"
@@ -750,6 +863,9 @@ async def get_or_create_mcp(
         base_url = _normalize_base_url(base_url)
 
         api_id = get_api_id(openapi_spec, base_url)
+        _API_ID_MEMO[memo_key] = api_id
+        while len(_API_ID_MEMO) > _API_ID_MEMO_MAX:
+            _API_ID_MEMO.pop(next(iter(_API_ID_MEMO)))
 
         if base_url:
             if "servers" not in openapi_spec:
@@ -811,6 +927,7 @@ async def get_or_create_mcp(
                     openapi_spec=openapi_spec,
                     client=client,
                     name=api_name,
+                    dereference_schemas=_dereference_schemas(),
                     **from_openapi_kwargs,
                 )
                 tools_list = await mcp_instance.list_tools()
@@ -1169,7 +1286,11 @@ async def _cache_lifespan(server):
         await _mcp_cache.clear()
 
 
-mcp = FastMCP(name="OpenAPI to MCP", lifespan=_cache_lifespan)
+mcp = FastMCP(
+    name="OpenAPI to MCP",
+    lifespan=_cache_lifespan,
+    dereference_schemas=_dereference_schemas(),
+)
 mcp.add_middleware(OpenAPI2MCPBridge())
 
 
@@ -1292,12 +1413,24 @@ async def openapi_verify(spec: Dict[str, Any] | str) -> Dict[str, Any]:
     openapi_version = spec_dict.get("openapi", "")
     if not isinstance(openapi_version, str):
         openapi_version = ""
+    converted_from: Optional[str] = None
     if swagger_version:
-        steps["version"] = {
-            "ok": False,
-            "error": f"Swagger {swagger_version} (OpenAPI 2.x) not supported — convert to OpenAPI 3.x first",
-        }
-        return {"success": False, "steps": steps}
+        if not str(swagger_version).startswith("2."):
+            steps["version"] = {
+                "ok": False,
+                "error": f"Swagger version {swagger_version!r} not supported — only 2.x is supported",
+            }
+            return {"success": False, "steps": steps}
+        try:
+            spec_dict = _convert_swagger2_to_openapi30(spec_dict)
+        except Exception as e:
+            steps["version"] = {
+                "ok": False,
+                "error": f"Swagger {swagger_version} conversion failed ({type(e).__name__}): {e}",
+            }
+            return {"success": False, "steps": steps}
+        converted_from = f"swagger {swagger_version}"
+        openapi_version = spec_dict["openapi"]
     if openapi_version and not openapi_version.startswith("3."):
         steps["version"] = {
             "ok": False,
@@ -1305,6 +1438,8 @@ async def openapi_verify(spec: Dict[str, Any] | str) -> Dict[str, Any]:
         }
         return {"success": False, "steps": steps}
     steps["version"] = {"ok": True, "version": openapi_version or "unknown"}
+    if converted_from:
+        steps["version"]["converted_from"] = converted_from
 
     # Step 3: structure
     issues = []
@@ -1333,7 +1468,12 @@ async def openapi_verify(spec: Dict[str, Any] | str) -> Dict[str, Any]:
     client: httpx.AsyncClient | None = None
     try:
         client = httpx.AsyncClient()
-        mcp_instance = FastMCP.from_openapi(openapi_spec=spec_dict, client=client, name="_verify")
+        mcp_instance = FastMCP.from_openapi(
+            openapi_spec=spec_dict,
+            client=client,
+            name="_verify",
+            dereference_schemas=_dereference_schemas(),
+        )
         tools = await mcp_instance.list_tools()
         steps["fastmcp"] = {"ok": True, "tools": len(tools)}
     except Exception as e:
@@ -1368,136 +1508,6 @@ async def openapi_verify(spec: Dict[str, Any] | str) -> Dict[str, Any]:
             await client.aclose()
 
     return {"success": True, "steps": steps}
-
-
-def _rewrite_refs(obj: Any, mapping: Dict[str, str]) -> Any:
-    if isinstance(obj, dict):
-        return {
-            k: (
-                mapping[v]
-                if k == "$ref" and isinstance(v, str) and v in mapping
-                else _rewrite_refs(v, mapping)
-            )
-            for k, v in obj.items()
-        }
-    if isinstance(obj, list):
-        return [_rewrite_refs(item, mapping) for item in obj]
-    return obj
-
-
-def _convert_swagger2_to_openapi30(spec: dict) -> dict:
-    global_consumes = spec.get("consumes", ["application/json"])
-    global_produces = spec.get("produces", ["application/json"])
-
-    # servers
-    schemes = spec.get("schemes", ["https"])
-    host = spec.get("host", "localhost")
-    base_path = spec.get("basePath", "/")
-    scheme = schemes[0] if schemes else "https"
-    servers = [{"url": f"{scheme}://{host}{base_path}"}]
-
-    # components
-    components: Dict[str, Any] = {}
-    if "definitions" in spec:
-        components["schemas"] = spec["definitions"]
-    if "securityDefinitions" in spec:
-        components["securitySchemes"] = spec["securityDefinitions"]
-
-    # rewrite $ref mappings
-    ref_map = {}
-    for name in spec.get("definitions", {}):
-        ref_map[f"#/definitions/{name}"] = f"#/components/schemas/{name}"
-
-    # paths
-    new_paths: Dict[str, Any] = {}
-    for path, path_item in spec.get("paths", {}).items():
-        new_path_item: Dict[str, Any] = {}
-        for method, operation in path_item.items():
-            if method in ("get", "post", "put", "delete", "patch", "options", "head", "trace"):
-                new_op = {
-                    k: v
-                    for k, v in operation.items()
-                    if k not in ("consumes", "produces", "parameters")
-                }
-                op_consumes = operation.get("consumes", global_consumes)
-                op_produces = operation.get("produces", global_produces)
-
-                # split parameters
-                body_params = []
-                form_params = []
-                other_params = []
-                for p in operation.get("parameters", []):
-                    if p.get("in") == "body":
-                        body_params.append(p)
-                    elif p.get("in") == "formData":
-                        form_params.append(p)
-                    else:
-                        other_params.append(p)
-
-                if other_params:
-                    new_op["parameters"] = other_params
-
-                # requestBody from body param
-                if body_params:
-                    p = body_params[0]
-                    schema = p.get("schema", {})
-                    required = p.get("required", False)
-                    content = {mt: {"schema": schema} for mt in op_consumes}
-                    new_op["requestBody"] = {"content": content, "required": required}
-                    if p.get("description"):
-                        new_op["requestBody"]["description"] = p["description"]
-
-                # requestBody from formData params
-                elif form_params:
-                    properties = {}
-                    required_fields = []
-                    for p in form_params:
-                        prop: Dict[str, Any] = {"type": p.get("type", "string")}
-                        if p.get("description"):
-                            prop["description"] = p["description"]
-                        properties[p["name"]] = prop
-                        if p.get("required"):
-                            required_fields.append(p["name"])
-                    form_schema: Dict[str, Any] = {"type": "object", "properties": properties}
-                    if required_fields:
-                        form_schema["required"] = required_fields
-                    new_op["requestBody"] = {
-                        "content": {"application/x-www-form-urlencoded": {"schema": form_schema}}
-                    }
-
-                # responses
-                new_responses: Dict[str, Any] = {}
-                for status, response in (operation.get("responses") or {}).items():
-                    new_resp = {k: v for k, v in response.items() if k != "schema"}
-                    if "schema" in response:
-                        new_resp["content"] = {
-                            mt: {"schema": response["schema"]} for mt in op_produces
-                        }
-                    new_responses[str(status)] = new_resp
-                new_op["responses"] = (
-                    new_responses
-                    if new_responses
-                    else {"default": {"description": "No response schema defined"}}
-                )
-
-                new_path_item[method] = new_op
-            else:
-                new_path_item[method] = path_item[method]
-        new_paths[path] = new_path_item
-
-    result: Dict[str, Any] = {
-        "openapi": "3.0.0",
-        "info": spec.get("info", {}),
-        "servers": servers,
-        "paths": new_paths,
-    }
-    if components:
-        result["components"] = components
-    for key in ("tags", "externalDocs", "security"):
-        if key in spec:
-            result[key] = spec[key]
-
-    return _rewrite_refs(result, ref_map)
 
 
 @mcp.tool()

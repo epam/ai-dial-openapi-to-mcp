@@ -6,6 +6,8 @@ OpenAPI to MCP is an outbound bridge for trusted MCP clients. It intentionally a
 
 The bridge does not validate or restrict destination hosts, and it never follows HTTP redirects. Deploy it behind authenticated ingress and grant access only to clients trusted to select destinations and supply OpenAPI documents.
 
+Schema requests for a client-supplied `openapi_url` are anonymous by default. `OPENAPI_FETCH_SEND_AUTH=true` makes them carry the request's `extra_headers` and DIAL credential to the schema host, which a client can choose; enable it only where all reachable hosts are trusted. Pin `base_url` when using `openapi_url`: otherwise the fetched document's `servers` entry chooses where tool calls (which carry credentials) go, so the schema host's owner can steer them. See the [configuration reference](../CONFIGURATION.md#openapi-spec-by-url).
+
 ## Credentials and headers
 
 DIAL external-service credentials are fetched per request and injected through request-local context. Resolution failures return an MCP error result with `_meta["dial.epam.com/error"].status_code`: `404` when the service is not configured on the application, `401` with a `_meta["dial.epam.com/auth-challenge"]` when the service is configured but the user has not signed in, and `500` for other failures. See the [configuration reference](../CONFIGURATION.md#dial-credentials).

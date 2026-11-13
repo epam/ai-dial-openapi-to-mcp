@@ -101,3 +101,48 @@ async def test_x_meta_header_takes_priority_over_body():
     spec, base_url = await _extract_spec_from_request(request)
     assert spec == SPEC_JSON
     assert base_url == "https://header.example.com"
+
+
+YAML_OPENAPI = """\
+openapi: 3.0.3
+info:
+  title: Yaml API
+  version: "1.0"
+paths:
+  /items:
+    get:
+      operationId: list_items
+      responses:
+        200:
+          description: ok
+"""
+
+YAML_SWAGGER = """\
+swagger: "2.0"
+info:
+  title: Old Yaml API
+  version: "1.0"
+host: legacy.example.com
+paths:
+  /items:
+    get:
+      operationId: list_items
+      responses:
+        200:
+          description: ok
+"""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text,title", [(YAML_OPENAPI, "Yaml API"), (YAML_SWAGGER, "Old Yaml API")])
+async def test_ai_dial_config_openapi_yaml_text(text, title):
+    from dial_openapi_to_mcp.server import get_or_create_mcp
+
+    request = _make_request({"params": {"_meta": {"ai_dial_config": {"openapi": text}}}})
+    spec, base_url = await _extract_spec_from_request(request)
+    assert spec is not None
+    assert json.loads(spec)["info"]["title"] == title
+
+    entry = await get_or_create_mcp(spec, request, base_url)
+    assert entry is not None
+    assert "list_items" in entry.tools
