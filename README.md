@@ -119,7 +119,7 @@ make test_cov   # unit tests with coverage report and floor
 
 ## MCP usage
 
-Pass an OpenAPI document through MCP `_meta.openapi` or the `X-META` request header. A base URL may be supplied through `X-BASE-URL`, `_meta.base_url`, or the OpenAPI `servers` field.
+Pass an OpenAPI document through MCP `_meta.openapi` (an object, or JSON/YAML text) or the `X-META` request header, or give its location with `_meta.openapi_url` (or `ai_dial_config.openapi_url`) or the `X-OPENAPI-URL` request header and the bridge fetches it anonymously (set `OPENAPI_FETCH_SEND_AUTH=true` to send the request's extra headers and DIAL credential on that request; see [CONFIGURATION.md](CONFIGURATION.md#openapi-spec-by-url)). OpenAPI 3.x and Swagger 2.0 documents are accepted, as JSON or YAML; Swagger 2.0 is converted to OpenAPI 3.0 automatically. An inline document takes precedence over a URL. A base URL may be supplied through `X-BASE-URL`, `_meta.base_url`, or the OpenAPI `servers` field.
 
 Use a normal MCP client session rather than sending incomplete raw JSON-RPC requests. The integration tests in [`tests/test_real_integration.py`](tests/test_real_integration.py) demonstrate a `FastMCP.Client` streamable-HTTP setup.
 

@@ -102,10 +102,18 @@ async def test_get_or_create_mcp_rejects_non_object_spec():
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_mcp_rejects_swagger():
+async def test_get_or_create_mcp_converts_swagger():
     request = _make_request({"params": {}})
     entry = await get_or_create_mcp(json.dumps(MINIMAL_SWAGGER_20), request)
-    assert entry is None
+    assert entry is not None
+    assert any("items" in name for name in entry.tools)
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_mcp_rejects_unknown_swagger_version():
+    spec = {**MINIMAL_SWAGGER_20, "swagger": "1.2"}
+    request = _make_request({"params": {}})
+    assert await get_or_create_mcp(json.dumps(spec), request) is None
 
 
 @pytest.mark.asyncio

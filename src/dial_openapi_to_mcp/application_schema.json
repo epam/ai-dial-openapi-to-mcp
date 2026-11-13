@@ -5,13 +5,22 @@
     "title": "OpenAPI to MCP Configuration",
     "properties": {
         "openapi": {
-            "type": "object",
+            "type": ["object", "string"],
             "title": "OpenAPI Spec",
-            "description": "OpenAPI Specification of the target API",
-            "properties": {},
+            "description": "OpenAPI 3.x or Swagger 2.0 specification of the target API, as a JSON/YAML object or as JSON/YAML text. Alternatively set OpenAPI Spec URL; an inline spec takes precedence.",
             "dial:meta": {
                 "dial:propertyKind": "server",
                 "dial:propertyOrder": 1
+            }
+        },
+        "openapi_url": {
+            "type": "string",
+            "format": "uri",
+            "title": "OpenAPI Spec URL",
+            "description": "URL of the target API's OpenAPI (3.x) or Swagger 2.0 document, JSON or YAML. Fetched anonymously by the bridge; Extra Headers and the External Service credential are sent only if the operator enables OPENAPI_FETCH_SEND_AUTH. Used only when no inline OpenAPI Spec is set.",
+            "dial:meta": {
+                "dial:propertyKind": "server",
+                "dial:propertyOrder": 2
             }
         },
         "base_url": {
@@ -20,7 +29,7 @@
             "description": "The base URL of the target API. All tool invocations will be made relative to this URL.",
             "dial:meta": {
                 "dial:propertyKind": "server",
-                "dial:propertyOrder": 2
+                "dial:propertyOrder": 3
             }
         },
         "extra_headers": {
@@ -44,7 +53,7 @@
             },
             "dial:meta": {
                 "dial:propertyKind": "server",
-                "dial:propertyOrder": 3
+                "dial:propertyOrder": 4
             }
         },
         "external_service": {
@@ -55,9 +64,9 @@
             "acceptableResourceTypes": ["external_services"],
             "dial:meta": {
                 "dial:propertyKind": "server",
-                "dial:propertyOrder": 4
+                "dial:propertyOrder": 5
             }
         }
     },
-    "required": ["openapi"]
+    "anyOf": [{"required": ["openapi"]}, {"required": ["openapi_url"]}]
 }
