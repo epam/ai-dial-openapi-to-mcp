@@ -98,7 +98,7 @@ def _fix_schema(schema: Any) -> Any:
 
 
 def _param_schema(param: Dict[str, Any]) -> Dict[str, Any]:
-    schema = {k: copy.deepcopy(param[k]) for k in _PARAM_SCHEMA_KEYS if k in param}
+    schema: Dict[str, Any] = {k: copy.deepcopy(param[k]) for k in _PARAM_SCHEMA_KEYS if k in param}
     if schema.get("type") == "file":
         schema = {"type": "string", "format": "binary"}
     if isinstance(schema.get("items"), dict):
