@@ -166,7 +166,8 @@ def _convert_response(
             if isinstance(header, dict)
         }
 
-    examples = response.get("examples") if isinstance(response.get("examples"), dict) else {}
+    raw_examples = response.get("examples")
+    examples: Dict[str, Any] = raw_examples if isinstance(raw_examples, dict) else {}
     if "schema" in response:
         schema = _fix_schema(response["schema"])
         content = {mt: {"schema": schema} for mt in produces}
@@ -301,7 +302,8 @@ def convert_swagger2_to_openapi30(spec: Dict[str, Any]) -> Dict[str, Any]:
     spec = copy.deepcopy(spec)
     global_consumes = spec.get("consumes") or ["application/json"]
     global_produces = spec.get("produces") or ["application/json"]
-    top_level_params = spec.get("parameters") if isinstance(spec.get("parameters"), dict) else {}
+    raw_top_params = spec.get("parameters")
+    top_level_params: Dict[str, Any] = raw_top_params if isinstance(raw_top_params, dict) else {}
 
     components: Dict[str, Any] = {}
     if isinstance(spec.get("definitions"), dict):
