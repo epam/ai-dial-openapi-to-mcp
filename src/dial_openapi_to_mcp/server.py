@@ -27,14 +27,12 @@ from .multipart import apply_file_uploads
 from .path_params import apply_path_param_encoding
 from .responses import apply_response_handling
 from .spec_fetch import (
-    SpecFetchError,
     fetch_openapi_spec,
     parse_spec_text,
     resolve_base_url,
     spec_text_to_json,
 )
 from .swagger2 import convert_swagger2_to_openapi30 as _convert_swagger2_to_openapi30
-from .swagger2 import rewrite_refs as _rewrite_refs
 from .telemetry import setup_telemetry
 
 _REQUEST_CREDENTIAL: ContextVar[tuple[str, str] | None] = ContextVar(

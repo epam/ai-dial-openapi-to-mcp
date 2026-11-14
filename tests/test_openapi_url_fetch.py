@@ -15,11 +15,13 @@ from dial_openapi_to_mcp.server import (
 )
 from dial_openapi_to_mcp.spec_fetch import (
     SpecFetchError,
+)
+from dial_openapi_to_mcp.spec_fetch import _cache as _spec_cache
+from dial_openapi_to_mcp.spec_fetch import (
     clear_spec_cache,
     fetch_openapi_spec,
     parse_spec_text,
 )
-from dial_openapi_to_mcp.spec_fetch import _cache as _spec_cache
 from helpers import MINIMAL_OPENAPI_30, MINIMAL_SWAGGER_20
 
 OPENAPI_30_YAML = """\
@@ -293,7 +295,15 @@ async def test_dial_credential_sent_when_enabled(schema_server, monkeypatch):
 
 @pytest.mark.parametrize(
     "value,expected",
-    [(None, False), ("", False), ("false", False), ("0", False), ("true", True), ("1", True), ("YES", True)],
+    [
+        (None, False),
+        ("", False),
+        ("false", False),
+        ("0", False),
+        ("true", True),
+        ("1", True),
+        ("YES", True),
+    ],
 )
 def test_send_auth_flag_parsing(monkeypatch, value, expected):
     from dial_openapi_to_mcp.server import _fetch_sends_auth
@@ -451,7 +461,10 @@ async def test_cache_is_capped_oldest_first(schema_server, monkeypatch):
     monkeypatch.setenv("OPENAPI_URL_CACHE_MAX_ENTRIES", "2")
     for name in ("a", "b", "c"):
         schema_server.routes[f"/{name}.json"] = (
-            200, "application/json", json.dumps(MINIMAL_OPENAPI_30), {}
+            200,
+            "application/json",
+            json.dumps(MINIMAL_OPENAPI_30),
+            {},
         )
         await fetch_openapi_spec(f"{schema_server.base}/{name}.json")
     assert [key[0].rsplit("/", 1)[1] for key in _spec_cache] == ["b.json", "c.json"]

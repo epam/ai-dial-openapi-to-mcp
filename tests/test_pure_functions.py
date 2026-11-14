@@ -5,9 +5,9 @@ import pytest
 from dial_openapi_to_mcp.server import (
     _convert_swagger2_to_openapi30,
     _normalize_base_url,
-    _rewrite_refs,
     get_api_id,
 )
+from dial_openapi_to_mcp.swagger2 import rewrite_refs as _rewrite_refs
 
 # ---------------------------------------------------------------------------
 # get_api_id

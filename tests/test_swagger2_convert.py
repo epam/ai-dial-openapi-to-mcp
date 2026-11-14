@@ -10,8 +10,7 @@ from fastmcp import FastMCP
 from dial_openapi_to_mcp.server import _mcp_cache, get_or_create_mcp
 from dial_openapi_to_mcp.swagger2 import convert_swagger2_to_openapi30
 
-PETSTORE = yaml.safe_load(
-    """
+PETSTORE = yaml.safe_load("""
 swagger: "2.0"
 info: {title: Petstore, version: "1"}
 host: pets.example.com
@@ -96,8 +95,7 @@ paths:
         - {name: note, in: formData, type: string}
       responses:
         200: {description: ok}
-"""
-)
+""")
 
 
 @pytest.fixture

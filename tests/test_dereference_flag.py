@@ -35,7 +35,10 @@ SPEC = {
         "schemas": {
             "Node": {
                 "type": "object",
-                "properties": {"name": {"type": "string"}, "child": {"$ref": "#/components/schemas/Leaf"}},
+                "properties": {
+                    "name": {"type": "string"},
+                    "child": {"$ref": "#/components/schemas/Leaf"},
+                },
             },
             "Leaf": {"type": "object", "properties": {"value": {"type": "integer"}}},
         }
@@ -109,8 +112,13 @@ async def test_repeat_spec_text_skips_parsing(monkeypatch, clean_cache):
     import dial_openapi_to_mcp.server as server
 
     text = "\n".join(
-        ["openapi: 3.0.0", "info: {title: Memo, version: '1'}", "paths:", "  /a:",
-         "    get: {operationId: getA, responses: {'200': {description: ok}}}"]
+        [
+            "openapi: 3.0.0",
+            "info: {title: Memo, version: '1'}",
+            "paths:",
+            "  /a:",
+            "    get: {operationId: getA, responses: {'200': {description: ok}}}",
+        ]
     )
     calls = []
     real_parse = server.parse_spec_text
