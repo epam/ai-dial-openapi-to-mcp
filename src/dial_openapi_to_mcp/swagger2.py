@@ -209,8 +209,7 @@ def _convert_operation(
     global_consumes: List[str],
     global_produces: List[str],
 ) -> Dict[str, Any]:
-    new_op = {
-        k: v for k, v in operation.items() if k not in ("consumes", "produces", "parameters")}
+    new_op = {k: v for k, v in operation.items() if k not in ("consumes", "produces", "parameters")}
     consumes = operation.get("consumes") or global_consumes
     produces = operation.get("produces") or global_produces
 
@@ -225,7 +224,9 @@ def _convert_operation(
 
     body_params = [p for p in merged if p.get("in") == "body"]
     form_params = [p for p in merged if p.get("in") == "formData"]
-    other_params = [_convert_parameter(p) for p in merged if p.get("in") not in ("body", "formData")]
+    other_params = [
+        _convert_parameter(p) for p in merged if p.get("in") not in ("body", "formData")
+    ]
     if other_params:
         new_op["parameters"] = other_params
 
@@ -265,7 +266,11 @@ def _convert_security_definitions(definitions: Dict[str, Any]) -> Dict[str, Any]
             schemes[name] = {
                 "type": "http",
                 "scheme": "basic",
-                **({"description": definition["description"]} if "description" in definition else {}),
+                **(
+                    {"description": definition["description"]}
+                    if "description" in definition
+                    else {}
+                ),
             }
         elif kind == "oauth2":
             flow_name = _OAUTH_FLOW_NAMES.get(definition.get("flow", ""), "implicit")

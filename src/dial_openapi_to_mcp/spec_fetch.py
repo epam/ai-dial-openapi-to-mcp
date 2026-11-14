@@ -160,9 +160,7 @@ async def _download_body(url: str, headers: Sequence[Tuple[str, str]]) -> str:
                 async for chunk in response.aiter_bytes():
                     size += len(chunk)
                     if size > max_bytes:
-                        raise SpecFetchError(
-                            f"OpenAPI spec exceeds the {max_bytes} byte limit"
-                        )
+                        raise SpecFetchError(f"OpenAPI spec exceeds the {max_bytes} byte limit")
                     chunks.append(chunk)
                 encoding = response.encoding or "utf-8"
     except httpx.HTTPError as error:
