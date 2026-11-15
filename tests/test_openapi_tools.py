@@ -74,11 +74,18 @@ async def test_verify_valid_openapi30(minimal_openapi_30):
 
 
 @pytest.mark.asyncio
-async def test_verify_swagger_fails_version(minimal_swagger_20):
+async def test_verify_swagger_is_converted(minimal_swagger_20):
     result = await openapi_verify(minimal_swagger_20)
+    assert result["success"] is True
+    assert result["steps"]["version"]["converted_from"] == "swagger 2.0"
+    assert result["steps"]["fastmcp"]["tools"] > 0
+
+
+@pytest.mark.asyncio
+async def test_verify_unknown_swagger_version_fails(minimal_swagger_20):
+    result = await openapi_verify({**minimal_swagger_20, "swagger": "1.2"})
     assert result["success"] is False
     assert result["steps"]["version"]["ok"] is False
-    assert "2.x" in result["steps"]["version"]["error"]
 
 
 @pytest.mark.asyncio

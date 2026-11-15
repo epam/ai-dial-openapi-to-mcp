@@ -22,7 +22,24 @@ The bridge intentionally accepts client-selected API destinations. Operators wit
 | `MCP_CACHE_TTL` | `3600` | No | Idle expiry in seconds; `0` disables TTL expiry. |
 | `MCP_CACHE_CLEANUP_INTERVAL` | `300` | No | Expired-entry cleanup period in seconds; `0` disables periodic cleanup. |
 
-Cache keys are derived only from the OpenAPI spec and normalized base URL. Cached definitions and HTTP clients contain no forwarded header names, header values, or DIAL credentials; those values exist only in request scope.
+MCP cache keys are derived only from the OpenAPI spec and normalized base URL. Cached definitions and HTTP clients contain no forwarded header names, header values, or DIAL credentials; those values exist only in request scope. The separate cache of fetched schemas (see [OpenAPI spec by URL](#openapi-spec-by-url)) is keyed by the URL plus a SHA-256 hash of the forwarded headers it was fetched with; only the hash is stored, never the header values.
+
+## OpenAPI spec by URL
+
+An inline `openapi` value may be an object or JSON/YAML text (the DIAL application schema allows both), in OpenAPI 3.x or Swagger 2.0 form.
+
+A client can supply `openapi_url` (`X-OPENAPI-URL` header, `_meta.ai_dial_config.openapi_url`, or `_meta.openapi_url`) instead of an inline document. The bridge fetches it with a plain `GET`; JSON and YAML are detected from the content, not the URL or `Content-Type`, and Swagger 2.0 is converted to OpenAPI 3.0. An inline document wins when both are present. Without an explicit base URL, the first `servers` entry is used (a relative entry resolves against the schema URL); with none, the schema URL's origin is used.
+
+| Variable | Default | Required | Description |
+|---|---:|---|---|
+| `OPENAPI_FETCH_TIMEOUT` | `10` | No | Total seconds allowed for the whole schema download (connect, headers and body), so a slow-drip server cannot hold a request open. |
+| `OPENAPI_FETCH_MAX_BYTES` | `10485760` | No | Maximum schema size; larger responses are rejected. |
+| `OPENAPI_URL_CACHE_TTL` | `3600` | No | Seconds a fetched schema is reused; `0` fetches on every request. |
+| `OPENAPI_URL_CACHE_STALE_TTL` | `86400` | No | Extra seconds, on top of `OPENAPI_URL_CACHE_TTL`, that the previous copy of a schema is served when refetching it fails (host down, error status, invalid document), so an outage of the schema host does not break tools. With the defaults a copy is usable for up to 25 h after it was fetched. Retries happen at most every 30 s and each fallback logs a warning. `0` disables the fallback. |
+| `OPENAPI_URL_CACHE_MAX_ENTRIES` | `32` | No | Maximum fetched schemas kept (one per URL and set of forwarded headers); the oldest are dropped first. `0` disables the cache. Each entry can be up to `OPENAPI_FETCH_MAX_BYTES`. |
+| `OPENAPI_FETCH_SEND_AUTH` | `false` | No | `true` sends the request's validated `extra_headers` and, when `external_service` is configured, the DIAL-resolved credential on the schema request. Off by default: the schema request is anonymous. |
+
+Only `http` and `https` URLs are accepted and redirects are not followed. By default the schema request is anonymous, so a caller-supplied `openapi_url` can never receive credentials. Protected schema endpoints need `OPENAPI_FETCH_SEND_AUTH=true`; with it, the schema host receives the same `extra_headers` and DIAL credential as the API calls, so enable it only where every host a client can name is trusted. Also pin `base_url` (in the application configuration or `X-BASE-URL`) when using `openapi_url`: without it the fetched document's `servers` entry decides where tool calls, which carry the forwarded headers and DIAL credential, are sent, so whoever controls the schema host can redirect them. Fetched schemas are cached per URL and per set of forwarded headers, never shared across credentials, including the stale fallback. As with `base_url`, restricting which hosts the bridge may reach is expected to be enforced by external network egress controls. A schema that cannot be fetched or parsed fails the request with an error instead of falling back to the default tools.
 
 ## Outbound header forwarding
 
@@ -46,6 +63,7 @@ All forwarded header values are read from the current request and injected only 
 | Variable | Default | Required | Description |
 |---|---:|---|---|
 | `MCP_VALIDATE_OUTPUT` | `true` | No | `false` stops validating JSON tool results against the output schemas derived from the spec, and tools publish no output schema. Per operation, `x-mcp: {validateOutput: false}` (or `true`) overrides it. See [docs/responses.md](docs/responses.md). |
+| `MCP_DEREFERENCE_SCHEMAS` | `true` | No | `true` inlines `$ref` in the tool input/output schemas (FastMCP default; genuinely circular refs stay as `$ref`/`$defs`). `false` keeps `$ref`/`$defs` everywhere. The `x-mcp` schema generator always inlines. Set `false` for large specs with deeply recursive schemas, where inlining can expand the schemas to 100+ MB, take about a minute per build and use hundreds of MB per cached spec. Clients that cannot resolve `$ref`/`$defs` need `true`. |
 
 ## DIAL credentials
 
