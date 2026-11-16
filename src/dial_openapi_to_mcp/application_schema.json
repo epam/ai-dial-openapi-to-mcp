@@ -5,7 +5,7 @@
     "title": "OpenAPI to MCP Configuration",
     "properties": {
         "openapi": {
-            "type": ["object", "string"],
+            "anyOf": [{"type": "object"}, {"type": "string"}],
             "title": "OpenAPI Spec",
             "description": "OpenAPI 3.x or Swagger 2.0 specification of the target API, as a JSON/YAML object or as JSON/YAML text. Alternatively set OpenAPI Spec URL; an inline spec takes precedence.",
             "dial:meta": {
@@ -15,7 +15,6 @@
         },
         "openapi_url": {
             "type": "string",
-            "format": "uri",
             "title": "OpenAPI Spec URL",
             "description": "URL of the target API's OpenAPI (3.x) or Swagger 2.0 document, JSON or YAML. Fetched anonymously by the bridge; Extra Headers and the External Service credential are sent only if the operator enables OPENAPI_FETCH_SEND_AUTH. Used only when no inline OpenAPI Spec is set.",
             "dial:meta": {
