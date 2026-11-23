@@ -71,7 +71,9 @@ async def test_free_form_body_is_sent_unwrapped(schema: dict[str, Any]) -> None:
 
 @pytest.mark.asyncio
 async def test_empty_free_form_body_is_empty_object() -> None:
-    request = await _send(_spec({"$ref": "#/components/schemas/ProxyRequest"}), {"id": "x", "body": {}})
+    request = await _send(
+        _spec({"$ref": "#/components/schemas/ProxyRequest"}), {"id": "x", "body": {}}
+    )
     assert json.loads(request.content) == {}
 
 

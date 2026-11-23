@@ -48,7 +48,11 @@ class FreeFormBodyRequestDirector(RequestDirector):
 
     def _unflatten_arguments(self, route: HTTPRoute, flat_args: dict[str, Any]) -> Any:
         path, query, header, cookie, body = super()._unflatten_arguments(route, flat_args)
-        if isinstance(body, dict) and set(body) == {_BODY_ARG} and isinstance(body[_BODY_ARG], dict):
+        if (
+            isinstance(body, dict)
+            and set(body) == {_BODY_ARG}
+            and isinstance(body[_BODY_ARG], dict)
+        ):
             body = body[_BODY_ARG]
         return path, query, header, cookie, body
 
