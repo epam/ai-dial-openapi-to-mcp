@@ -23,6 +23,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .cache import CacheEntry, MCPCache
+from .free_form_body import apply_free_form_body
 from .multipart import apply_file_uploads
 from .path_params import apply_path_param_encoding
 from .responses import apply_response_handling
@@ -594,6 +595,7 @@ def _build_component_fn(
                     route, component, openapi_spec, allow_reserved_all
                 ),
             ),
+            ("free-form body", lambda: apply_free_form_body(route, component)),
             ("file uploads", lambda: apply_file_uploads(route, component, openapi_spec)),
             (
                 "response handling",
